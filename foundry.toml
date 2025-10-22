@@ -17,9 +17,11 @@ via_ir = false
 # See more config options at https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
 
 [rpc_endpoints]
-# Add your RPC endpoints here
-# mainnet = "${MAINNET_RPC_URL}"
-# sepolia = "${SEPOLIA_RPC_URL}"
+# Ethereum Mainnet RPC endpoints (from MVP spec)
+mainnet = "https://eth.llamarpc.com"
+mainnet_alt1 = "https://ethereum-rpc.publicnode.com"
+mainnet_alt2 = "https://eth.drpc.org"
+mainnet_alt3 = "https://ethereum-json-rpc.stakely.io"
 
 [etherscan]
 # Add your Etherscan API key here
