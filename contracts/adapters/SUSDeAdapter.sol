@@ -21,10 +21,10 @@ contract SUSDeAdapter is ISUSDeAdapter {
     //////////////////////////////////////////////////////////////*/
 
     /// @notice USDe token address (0x4c9edd5852cd905f086c759e8383e09bff1e68b3)
-    IUSDe public immutable override baseAsset;
+    IUSDe private immutable _baseAsset;
 
     /// @notice sUSDe token address (0x9D39A5DE30e57443BfF2A8307A4256c8797A3497)
-    ISUSDe public immutable override stakeToken;
+    ISUSDe private immutable _stakeToken;
 
     /// @notice Address authorized to call adapter functions (CooldownManager)
     address public immutable cooldownManager;
@@ -43,17 +43,17 @@ contract SUSDeAdapter is ISUSDeAdapter {
 
     /**
      * @notice Initialize adapter with token addresses
-     * @param _baseAsset USDe token address
-     * @param _stakeToken sUSDe token address
+     * @param baseAsset_ USDe token address
+     * @param stakeToken_ sUSDe token address
      * @param _cooldownManager CooldownManager address
      */
     constructor(
-        address _baseAsset,
-        address _stakeToken,
+        address baseAsset_,
+        address stakeToken_,
         address _cooldownManager
     ) {
-        baseAsset = IUSDe(_baseAsset);
-        stakeToken = ISUSDe(_stakeToken);
+        _baseAsset = IUSDe(baseAsset_);
+        _stakeToken = ISUSDe(stakeToken_);
         cooldownManager = _cooldownManager;
     }
 
@@ -73,6 +73,20 @@ contract SUSDeAdapter is ISUSDeAdapter {
     /**
      * @inheritdoc ISUSDeAdapter
      */
+    function baseAsset() external view override returns (address) {
+        return address(_baseAsset);
+    }
+
+    /**
+     * @inheritdoc ISUSDeAdapter
+     */
+    function stakeToken() external view override returns (address) {
+        return address(_stakeToken);
+    }
+
+    /**
+     * @inheritdoc ISUSDeAdapter
+     */
     function previewUnstake(uint256 amountStake)
         external
         view
@@ -80,10 +94,10 @@ contract SUSDeAdapter is ISUSDeAdapter {
         returns (uint256 amountBase, uint256 etaSeconds)
     {
         // Convert sUSDe to USDe using current exchange rate
-        amountBase = stakeToken.convertToAssets(amountStake);
+        amountBase = _stakeToken.convertToAssets(amountStake);
 
         // Get cooldown duration from protocol
-        etaSeconds = uint256(stakeToken.cooldownDuration());
+        etaSeconds = uint256(_stakeToken.cooldownDuration());
 
         return (amountBase, etaSeconds);
     }
@@ -104,17 +118,17 @@ contract SUSDeAdapter is ISUSDeAdapter {
         if (locker == address(0)) revert InvalidLocker();
 
         // Transfer sUSDe from caller (CooldownManager/Vault) to this adapter
-        IERC20(address(stakeToken)).safeTransferFrom(
+        IERC20(address(_stakeToken)).safeTransferFrom(
             msg.sender,
             address(this),
             amountStake
         );
 
         // Transfer sUSDe to locker
-        IERC20(address(stakeToken)).safeTransfer(locker, amountStake);
+        IERC20(address(_stakeToken)).safeTransfer(locker, amountStake);
 
         // Calculate expected base amount
-        expectedBase = stakeToken.convertToAssets(amountStake);
+        expectedBase = _stakeToken.convertToAssets(amountStake);
 
         // Call cooldownShares via locker
         bytes memory cooldownCalldata = abi.encodeWithSelector(
@@ -122,10 +136,10 @@ contract SUSDeAdapter is ISUSDeAdapter {
             amountStake
         );
 
-        Locker(locker).execute(address(stakeToken), cooldownCalldata);
+        Locker(locker).execute(address(_stakeToken), cooldownCalldata);
 
         // Calculate maturity time
-        uint64 cooldownDuration = stakeToken.cooldownDuration();
+        uint64 cooldownDuration = _stakeToken.cooldownDuration();
         t1 = uint64(block.timestamp) + cooldownDuration;
 
         // Generate claim ID (hash of locker address and timestamp)
@@ -148,13 +162,13 @@ contract SUSDeAdapter is ISUSDeAdapter {
         if (locker == address(0)) revert InvalidLocker();
 
         // Check that cooldown is complete
-        ISUSDe.UserCooldown memory cooldown = stakeToken.cooldowns(locker);
+        ISUSDe.UserCooldown memory cooldown = _stakeToken.cooldowns(locker);
         if (block.timestamp < cooldown.cooldownEnd) {
             revert CooldownNotComplete();
         }
 
         // Get balance before unstake
-        uint256 balanceBefore = baseAsset.balanceOf(receiver);
+        uint256 balanceBefore = _baseAsset.balanceOf(receiver);
 
         // Call unstake via locker to receive USDe
         bytes memory unstakeCalldata = abi.encodeWithSelector(
@@ -162,10 +176,10 @@ contract SUSDeAdapter is ISUSDeAdapter {
             receiver
         );
 
-        Locker(locker).execute(address(stakeToken), unstakeCalldata);
+        Locker(locker).execute(address(_stakeToken), unstakeCalldata);
 
         // Get balance after unstake
-        uint256 balanceAfter = baseAsset.balanceOf(receiver);
+        uint256 balanceAfter = _baseAsset.balanceOf(receiver);
         amountBaseReceived = balanceAfter - balanceBefore;
 
         emit UnstakeClaimed(locker, claimId, receiver, amountBaseReceived);
