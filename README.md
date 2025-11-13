@@ -1,125 +1,52 @@
 # sUSDe/USDe Staking Arbitrage Vault
 
-Automated DeFi vault that captures arbitrage opportunities between sUSDe (staked USDe) and USDe tokens by exploiting market price discrepancies.
+ERC-4626 vault that captures arbitrage opportunities between sUSDe (staked USDe) and USDe tokens by purchasing discounted sUSDe on secondary markets and unstaking for profit.
 
 ## Overview
 
-This vault systematically:
-1. Monitors sUSDe/USDe price spreads across DEXs
-2. Purchases discounted sUSDe when spread exceeds threshold (0.15%+)
-3. Initiates unstaking process to receive full USDe value
-4. Manages 7-day cooldown period efficiently
-5. Distributes profits to vault depositors
+The vault enables depositors to earn returns by exploiting sUSDe market price discrepancies. When sUSDe trades below its fair value on DEXs (typically 0.1%-0.3% discount), authorized keepers execute arbitrage trades: purchase discounted sUSDe and initiate unstaking to receive full USDe value after the 7-day cooldown period.
 
 ## Key Features
 
-- **Automated Arbitrage**: Continuous monitoring and execution of profitable trades
-- **Capital Efficient**: Maintains >85% capital utilization through rolling positions
-- **Risk Minimized**: Pure arbitrage with no directional market exposure
-- **Market Support**: Improves sUSDe liquidity and reduces market discounts
-
-## Architecture
-
-```
-├── contracts/          # Smart contracts
-│   ├── ArbitrageVault.sol
-│   ├── PriceOracle.sol
-│   └── interfaces/
-├── src/               # TypeScript bot implementation
-│   ├── bot/           # Arbitrage bot logic
-│   ├── monitoring/    # Price monitoring services
-│   └── strategies/    # Trading strategies
-├── test/              # Test suites
-└── docs/              # Documentation
-```
+- **ERC-4626 Standard**: Standard tokenized vault with withdrawal queue extension
+- **Automated Arbitrage**: Authorized keepers execute profitable trades with minimum profit threshold
+- **Fair Share Pricing**: Time-weighted profit accrual ensures fair NAV for all depositors
+- **Withdrawal Queue**: FIFO queue with cancellation and partial fulfillment support
+- **Performance Fees**: Configurable fee on realized profits
 
 ## How It Works
 
-### Arbitrage Cycle
+1. **Deposit**: Users deposit USDe and receive vault shares
+2. **Arbitrage Execution**: Authorized keepers purchase discounted sUSDe when profitable
+3. **Unstaking**: Vault immediately initiates 7-day cooldown unstaking
+4. **Position Maturation**: After 7 days, positions become claimable
+5. **Profit Realization**: Claimed positions add profit to vault, increasing share value
+6. **Withdrawal**: Users request withdrawals via queue, fulfilled FIFO as positions mature
 
-1. **Detection**: Bot monitors DEX pools for sUSDe trading below fair value
-2. **Execution**: When spread > 0.15%, vault buys sUSDe at discount
-3. **Unstaking**: Initiates unstaking to convert sUSDe → USDe at full value
-4. **Cooldown**: Manages 7-day waiting period with capital rotation
-5. **Collection**: Claims USDe after cooldown, realizing profit
-6. **Distribution**: Profits compound into vault share value
+## Documentation
 
-### Example Trade
+- [Vision](docs/vision.md) - Product vision and success metrics
+- [Requirements](docs/requirements.md) - Functional requirements
+- [ADRs](docs/adrs/plan.md) - Architecture decision records
 
-- sUSDe market price: 0.997 USDe
-- sUSDe fair value: 1.000 USDe (1:1 unstaking ratio)
-- Spread: 0.3%
-- Trade size: 100,000 USDe
-- Cost: 99,700 USDe
-- Receive after 7 days: 100,000 USDe
-- Profit: 300 USDe (0.3%)
+## Architecture Decisions
 
-## Technical Stack
+The vault implements several key design decisions:
 
-- **Smart Contracts**: Solidity 0.8.x
-- **Bot**: TypeScript, Ethers.js
-- **Monitoring**: The Graph, custom indexers
-- **Infrastructure**: Docker, Kubernetes
-- **Testing**: Hardhat, Foundry
-
-## Risk Management
-
-### Primary Risks
-- Smart contract risk (Ethena protocol)
-- Liquidity risk (large position sizes)
-- Gas cost risk (unprofitable during high gas)
-- Cooldown period capital lock
-
-### Mitigations
-- Position size limits
-- Minimum spread requirements
-- Gas price monitoring
-- Rolling position management
-
-## Getting Started
-
-### Prerequisites
-```bash
-node >= 18.0.0
-npm >= 9.0.0
-```
-
-### Installation
-```bash
-npm install
-```
-
-### Configuration
-```bash
-cp .env.example .env
-# Edit .env with your settings
-```
-
-### Running the Bot
-```bash
-npm run bot:start
-```
-
-### Testing
-```bash
-npm test
-```
-
-## Performance Targets
-
-| Metric | Target | Description |
-|--------|--------|-------------|
-| APY | 10-15% | Annual yield for vault depositors |
-| Spread Capture | 0.20%+ | Average profit per arbitrage |
-| Success Rate | >95% | Profitable trades percentage |
-| Capital Efficiency | >85% | Active capital deployment |
+- **ERC-4626 with Withdrawal Queue** (ADR-001): Standard vault interface extended with withdrawal queue to prevent indefinite lockup during continuous redeployment
+- **Time-Weighted NAV** (ADR-002): Fair share pricing using time-proportional profit accrual
+- **Accrual Rate Accounting** (ADR-003): O(1) NAV calculation via aggregate accrual rate instead of iterating positions
+- **Off-Chain Price Discovery** (ADR-004): Keepers provide swap parameters, vault validates minimum profit threshold
+- **Owner-Controlled Parameters** (ADR-005): Single owner controls all 5 parameters (performance fee, fee recipient, min profit threshold, keeper whitelist, owner)
+- **No Deployment Limits** (ADR-006): Withdraw via queue instead of limiting capital deployment
+- **Continuous Fee Collection** (ADR-007): Fees collected on every external call for smooth distribution
 
 ## Security
 
-- Multi-sig vault control
-- Timelock on parameter changes
-- Emergency pause functionality
-- Regular audits scheduled
+- Owner-controlled parameter management
+- Minimum profit threshold prevents unprofitable trades
+- Keeper authorization prevents unauthorized arbitrage execution
+- 7-day unstaking period enforced by Ethena protocol
 
 ## License
 
