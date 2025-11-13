@@ -37,11 +37,18 @@ Use internal `balanceOf` mapping with non-transferable shares. Trade-off: Simple
 - Vault becomes composable with ERC-4626-compatible protocols.
 - Share tokens can be transferred, used as collateral, or integrated with yield aggregators.
 - Withdrawal queue requires additional state to track pending requests with request IDs, user addresses, and share amounts.
-- Queue fulfillment logic must process requests FIFO as liquidity becomes available from maturing positions.
+- Queue fulfillment logic processes requests in FIFO order as liquidity becomes available.
+- Users can cancel pending withdrawal requests at any time (cancellation returns shares to user).
+- Partial fulfillment supported: when position matures, released USDe fulfills queued withdrawals in FIFO order until depleted, then remainder replenishes vault idle USDe.
 - Users can always request withdrawals that will eventually be fulfilled, preventing indefinite liquidity lock.
 - Vault can maintain high capital efficiency by deploying most assets into arbitrage while still honoring withdrawal requests.
 - Two withdrawal paths: immediate (standard ERC-4626) when liquidity available, or queued when liquidity insufficient.
-- Emergency pause affects deposits, new arbitrage positions, and queue fulfillment.
+
+**Example: Partial Fulfillment Flow**
+- User requests 100 USDe withdrawal, but only 30 USDe idle → 30 USDe fulfilled immediately, 70 USDe queued
+- Position A matures releasing 50 USDe → 50 USDe goes to queued request (now 20 USDe remaining in queue)
+- Position B matures releasing 100 USDe → 20 USDe completes queued request (WithdrawalFulfilled event), 80 USDe goes to vault idle balance
+- User receives total 100 USDe across 3 transactions (30 + 50 + 20)
 
 ### On-Chain Implementation Notes
 
@@ -59,8 +66,16 @@ Use internal `balanceOf` mapping with non-transferable shares. Trade-off: Simple
 - Standard ERC-4626 events for deposits and withdrawals
 - `WithdrawalRequested(uint256 indexed requestId, address indexed user, uint256 shares)`
 - `WithdrawalFulfilled(uint256 indexed requestId, address indexed user, uint256 assets)`
+- `WithdrawalCancelled(uint256 indexed requestId, address indexed user, uint256 shares)`
 
-Queue processing details (keeper operations, FIFO ordering, batch processing) are implementation concerns beyond this architectural decision.
+**Queue Fulfillment:**
+- When unstaking position completes, released USDe fulfills queued withdrawals in FIFO order
+- Partial fulfillment supported: requests fulfilled across multiple position maturations
+- Remaining USDe replenishes vault idle balance
+
+**Cancellation:**
+- Users can cancel pending withdrawal requests at any time
+- Cancellation returns unfulfilled shares to user
 
 ### Dependencies
 

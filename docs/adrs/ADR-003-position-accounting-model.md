@@ -66,6 +66,15 @@ Track only total book value and total expected profit; no individual positions. 
 - NAV = idle USDe + accumulated realized profit + (accrual rate × time elapsed since last update).
 - No iteration over positions required.
 
+**Error Handling - Ethena Protocol Dependency**
+- Vault is 100% dependent on Ethena staking/unstaking functionality
+- If Ethena contract calls fail (e.g., convertToAssets(), cooldownShares(), cooldownAssets()):
+  - Transactions revert with Ethena error message
+  - No fallback or recovery mechanism possible on-chain
+  - Vault operations halt until Ethena protocol resumes normal operation
+- No mitigation strategy beyond Ethena protocol reliability
+- Depositors assume Ethena protocol risk when using vault
+
 ### Dependencies
 
 - ADR-001: ERC-4626 totalAssets() must incorporate position values.

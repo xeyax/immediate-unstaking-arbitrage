@@ -42,10 +42,11 @@ Keeper submits expected spread; contract validates against MIN_SPREAD threshold 
 
 **On-chain Behavior**
 - executeArbitrage() receives amountIn and minAmountOut parameters.
-- Contract validates capital availability and position limits.
+- Contract validates capital availability.
+- Contract validates minimum profit threshold (configurable parameter, default 0.1%).
 - Slippage protection via minAmountOut prevents execution at worse-than-expected prices.
 - After swap completes, actual profit immediately known via Ethena protocol contracts.
-- No on-chain price validation or spread threshold checks.
+- No on-chain price oracle validation.
 
 **Trade-offs**
 - Gas efficient: no oracle calls, minimal validation logic.
@@ -60,24 +61,28 @@ Keeper submits expected spread; contract validates against MIN_SPREAD threshold 
 - No expectedSpread or market price parameters needed
 
 **Execution Flow**
-1. Validate capital availability and position limits
-2. Execute swap with minAmountOut slippage protection
-3. Initiate unstaking for received sUSDe
-4. Calculate actual profit via Ethena protocol contracts
-5. Emit ArbitrageExecuted event with actual profit for off-chain monitoring
+1. Validate keeper authorization
+2. Validate capital availability
+3. Calculate expected profit: sUSDe.convertToAssets(expected_sUSDe_amount) - amountIn
+4. Validate minimum profit: require(expectedProfit >= (amountIn × minProfitThreshold) / 10000)
+5. Execute swap with minAmountOut slippage protection
+6. Initiate unstaking for received sUSDe
+7. Calculate actual profit via Ethena protocol contracts
+8. Emit ArbitrageExecuted event with actual profit for off-chain monitoring
 
 **Key Points**
 - No oracle calls or on-chain price validation
+- Minimum profit threshold prevents unprofitable trades (default 0.1% = 10 basis points)
 - Actual profit known immediately via Ethena protocol contracts
-- Slippage protection is the only on-chain safeguard against bad executions
+- Slippage protection and minimum profit threshold together prevent bad executions
 
 ### Dependencies
 
-- ADR-005 (Keeper Authorization Model): Keeper permissioning defines who can execute arbitrage.
+- ADR-005 (Access Control and Parameters): Keeper authorization and minimum profit threshold parameter.
 
 ### ADRs Depending on This
 
-- ADR-006 (Risk Limit Architecture): Risk limits apply to trade sizes.
+- ADR-006 (Withdrawal Liquidity Management): No deployment limits means keeper can execute all profitable opportunities above threshold.
 
 ### References
 

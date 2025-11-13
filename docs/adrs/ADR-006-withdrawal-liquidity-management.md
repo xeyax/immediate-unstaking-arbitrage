@@ -57,7 +57,14 @@ Only authorized keepers can finalize positions, no automatic finalization on wit
 - If idle capital insufficient, call _finalizeMaturedPositions() internal function.
 - _finalizeMaturedPositions() iterates positions where block.timestamp >= startTime + COOLDOWN_PERIOD.
 - Finalize positions until sufficient liquidity available or no more matured positions.
-- If still insufficient, add to withdrawal queue with estimated fulfillment time.
+- If still insufficient, add to withdrawal queue (see ADR-001 for queue details).
+
+**Queue Integration with Position Finalization**
+- When keeper finalizes matured position, released USDe distributed in order:
+  1. Fulfill queued withdrawals (FIFO) until queue empty or USDe depleted
+  2. Remaining USDe replenishes vault idle balance
+- Partial fulfillment supported: large withdrawal requests fulfilled across multiple position maturations
+- Users notified via WithdrawalFulfilled events as their requests processed
 
 **Position Tracking**
 - Maintain position array or enumerable set for iteration during finalization.

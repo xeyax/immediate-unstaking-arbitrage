@@ -47,6 +47,12 @@ Trade-offs: Conservative; positions ready to claim but not yet claimed are under
 
 ### Consequences
 
+**Bootstrap / Initial Deposit**
+- First deposit establishes 1:1 price per share (PPS = 1)
+- First depositor receives shares equal to USDe amount deposited
+- Standard ERC-4626 behavior: if totalSupply == 0, shares = assets
+
+**Ongoing Operations**
 - NAV calculation requires single sUSDe.convertToAssets() call to determine expectedProfit for accrual calculation.
 - Share price gradually increases as positions age toward maturity, reflecting time-proportional profit recognition.
 - Depositors pay fair value: book value plus only the portion of profit accrued during elapsed cooldown time.

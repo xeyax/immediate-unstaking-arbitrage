@@ -8,7 +8,7 @@ _Related:_ FR-02, FR-05
 
 ## FR-02 — Arbitrage Opportunity Validation
 
-The vault must validate that proposed arbitrage trades are profitable after accounting for all costs and the 7-day unstaking period. The vault must verify sufficient capital is available for executing the trade.
+The vault must validate that proposed arbitrage trades are profitable after accounting for all costs and the 7-day unstaking period. The vault must enforce a configurable minimum profit threshold to prevent execution of trades with insufficient spread. The vault must verify sufficient capital is available for executing the trade.
 
 _Related:_ FR-01, FR-03, FR-04
 
@@ -32,7 +32,7 @@ _Related:_ FR-01, FR-04
 
 ## FR-06 — Withdrawal Liquidity Management
 
-The vault must manage withdrawal requests when capital is deployed in unstaking positions. The vault must attempt to finalize matured positions to provide liquidity for withdrawals. Users must be informed of maximum withdrawal wait time (7 days corresponding to unstaking cooldown period). The vault must provide emergency pause functionality to halt operations when needed.
+The vault must manage withdrawal requests when capital is deployed in unstaking positions. The vault must attempt to finalize matured positions to provide liquidity for withdrawals. Users must be informed of maximum withdrawal wait time (7 days corresponding to unstaking cooldown period).
 
 _Related:_ FR-01, FR-04
 
@@ -47,9 +47,3 @@ _Related:_ FR-04, FR-05, FR-08
 The vault must collect a performance fee on realized arbitrage profits. The fee percentage must be configurable by authorized roles and the collected fees must be distributed to a designated fee recipient address.
 
 _Related:_ FR-07
-
-## FR-09 — Protocol Risk Protection
-
-The vault must protect against Ethena protocol risks by validating that sUSDe can be properly unstaked and that the unstaking mechanism is functioning correctly. The vault must include safeguards to detect and prevent executing trades during periods when the Ethena protocol may be compromised or undergoing emergency procedures.
-
-_Related:_ FR-02, FR-03, FR-06
