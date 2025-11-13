@@ -1,0 +1,33 @@
+{
+  "name": "staking-arbitrage",
+  "version": "1.0.0",
+  "description": "ERC-4626 vault that captures arbitrage opportunities between sUSDe (staked USDe) and USDe tokens by purchasing discounted sUSDe on secondary markets and unstaking for profit.",
+  "scripts": {
+    "test": "hardhat test",
+    "test:gas": "REPORT_GAS=true hardhat test",
+    "compile": "hardhat compile",
+    "coverage": "hardhat coverage",
+    "clean": "hardhat clean",
+    "typechain": "hardhat typechain"
+  },
+  "keywords": [
+    "defi",
+    "erc4626",
+    "arbitrage",
+    "ethena"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@types/chai": "^5.2.3",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^24.10.1",
+    "hardhat": "^2.22.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^5.4.0"
+  }
+}

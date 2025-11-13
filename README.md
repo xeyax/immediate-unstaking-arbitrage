@@ -23,11 +23,52 @@ The vault enables depositors to earn returns by exploiting sUSDe market price di
 5. **Profit Realization**: Claimed positions add profit to vault, increasing share value
 6. **Withdrawal**: Users request withdrawals via queue, fulfilled FIFO as positions mature
 
+## Development
+
+### Tech Stack
+- **Smart Contracts**: Solidity 0.8.20
+- **Framework**: Hardhat
+- **Testing**: TypeScript + Chai + Ethers v6
+- **Type Generation**: TypeChain for contract types
+
+### Quick Start
+
+```bash
+# Install dependencies
+npm install
+
+# Compile contracts and generate TypeChain types
+npm run compile
+
+# Run tests
+npm test
+
+# Run tests with gas reporting
+npm run test:gas
+
+# Run coverage
+npm run coverage
+```
+
+### Project Structure
+```
+contracts/
+  ├── ArbitrageVault.sol      # Main ERC-4626 vault
+  └── mocks/
+      └── MockERC20.sol        # Test token
+test/
+  └── ArbitrageVault.test.ts   # TypeScript tests
+docs/
+  └── development-plan.md      # Implementation roadmap
+```
+
 ## Documentation
 
 - [Vision](docs/vision.md) - Product vision and success metrics
 - [Requirements](docs/requirements.md) - Functional requirements
 - [ADRs](docs/adrs/plan.md) - Architecture decision records
+- [Development Plan](docs/development-plan.md) - Implementation roadmap
+- [Test Coverage](docs/test-coverage.md) - Test checklist and coverage tracking
 
 ## Architecture Decisions
 

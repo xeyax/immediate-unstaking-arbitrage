@@ -19,3 +19,15 @@ lib/
 # Node
 node_modules/
 
+# Hardhat
+artifacts/
+typechain-types/
+coverage/
+coverage.json
+.coverage_contracts/
+.coverage_cache/
+
+# TypeScript
+dist/
+*.tsbuildinfo
+
