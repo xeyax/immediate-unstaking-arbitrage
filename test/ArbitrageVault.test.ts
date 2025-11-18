@@ -1,10 +1,12 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
 import { loadFixture } from "@nomicfoundation/hardhat-toolbox/network-helpers";
-import { ArbitrageVault, MockERC20 } from "../typechain-types";
+import { ArbitrageVault, MockERC20, MockStakedUSDe } from "../typechain-types";
 import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 
 describe("ArbitrageVault", function () {
+  const COOLDOWN_DURATION = 7 * 24 * 60 * 60; // 7 days
+
   // Fixture to deploy the contract and set up initial state
   async function deployVaultFixture() {
     const [owner, user1, user2]: HardhatEthersSigner[] = await ethers.getSigners();
@@ -14,10 +16,19 @@ describe("ArbitrageVault", function () {
     const usdeToken: MockERC20 = await MockERC20Factory.deploy("USDe", "USDe", 18);
     await usdeToken.waitForDeployment();
 
+    // Deploy mock sUSDe token
+    const MockStakedUSDeFactory = await ethers.getContractFactory("MockStakedUSDe");
+    const stakedUsde: MockStakedUSDe = await MockStakedUSDeFactory.deploy(
+      await usdeToken.getAddress(),
+      COOLDOWN_DURATION
+    );
+    await stakedUsde.waitForDeployment();
+
     // Deploy ArbitrageVault
     const ArbitrageVaultFactory = await ethers.getContractFactory("ArbitrageVault");
     const vault: ArbitrageVault = await ArbitrageVaultFactory.deploy(
-      await usdeToken.getAddress()
+      await usdeToken.getAddress(),
+      await stakedUsde.getAddress()
     );
     await vault.waitForDeployment();
 
@@ -26,7 +37,7 @@ describe("ArbitrageVault", function () {
     await usdeToken.mint(user1.address, initialBalance);
     await usdeToken.mint(user2.address, initialBalance);
 
-    return { vault, usdeToken, owner, user1, user2, initialBalance };
+    return { vault, usdeToken, stakedUsde, owner, user1, user2, initialBalance };
   }
 
   describe("Deployment", function () {
@@ -51,10 +62,20 @@ describe("ArbitrageVault", function () {
 
     it("Should revert if USDe token address is zero", async function () {
       const ArbitrageVaultFactory = await ethers.getContractFactory("ArbitrageVault");
+      const { stakedUsde } = await loadFixture(deployVaultFixture);
 
       await expect(
-        ArbitrageVaultFactory.deploy(ethers.ZeroAddress)
+        ArbitrageVaultFactory.deploy(ethers.ZeroAddress, await stakedUsde.getAddress())
       ).to.be.revertedWith("ArbitrageVault: zero address");
+    });
+
+    it("Should revert if sUSDe token address is zero", async function () {
+      const ArbitrageVaultFactory = await ethers.getContractFactory("ArbitrageVault");
+      const { usdeToken } = await loadFixture(deployVaultFixture);
+
+      await expect(
+        ArbitrageVaultFactory.deploy(await usdeToken.getAddress(), ethers.ZeroAddress)
+      ).to.be.revertedWith("ArbitrageVault: zero sUSDe address");
     });
   });
 

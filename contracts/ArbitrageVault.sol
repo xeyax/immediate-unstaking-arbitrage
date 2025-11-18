@@ -6,6 +6,9 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "./interfaces/IStakedUSDe.sol";
+import "./interfaces/IUSDe.sol";
+import "./UnstakeProxy.sol";
 
 /**
  * @title ArbitrageVault
@@ -26,6 +29,7 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
  * - ADR-002: Time-weighted profit accrual
  * - ADR-003: O(1) position accounting via accrual rate
  * - ADR-005: Owner + keeper access control
+ * - ADR-008: Proxy orchestration for concurrent unstakes
  */
 contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
@@ -37,6 +41,15 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
 
     /// @notice Vault symbol: "avUSDe"
     string private constant VAULT_SYMBOL = "avUSDe";
+
+    /// @notice Ethena's Staked USDe contract
+    IStakedUSDe public immutable stakedUsde;
+
+    /// @notice Array of all deployed unstake proxy contracts
+    address[] public unstakeProxies;
+
+    /// @notice Mapping tracking which proxies are currently busy with active unstakes
+    mapping(address proxy => bool isBusy) public proxyBusy;
 
     /* ========== EVENTS ========== */
 
@@ -64,22 +77,46 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
         uint256 shares
     );
 
+    /**
+     * @notice Emitted when new unstake proxies are deployed
+     * @param count Number of proxies deployed
+     * @param totalProxies Total number of proxies after deployment
+     */
+    event ProxiesDeployed(uint256 count, uint256 totalProxies);
+
+    /**
+     * @notice Emitted when a proxy is allocated for unstaking
+     * @param proxy Address of allocated proxy
+     */
+    event ProxyAllocated(address indexed proxy);
+
+    /**
+     * @notice Emitted when a proxy is released back to available pool
+     * @param proxy Address of released proxy
+     */
+    event ProxyReleased(address indexed proxy);
+
     /* ========== CONSTRUCTOR ========== */
 
     /**
      * @notice Initializes the ArbitrageVault contract
      * @param usdeToken Address of the USDe token (underlying asset)
+     * @param stakedUsdeToken Address of the Ethena sUSDe token
      * @dev Sets up ERC4626 with USDe as the underlying asset
      *      and initializes ownership to the deployer
      */
     constructor(
-        address usdeToken
+        address usdeToken,
+        address stakedUsdeToken
     )
         ERC4626(IERC20(usdeToken))
         ERC20(VAULT_NAME, VAULT_SYMBOL)
         Ownable(msg.sender)
     {
         require(usdeToken != address(0), "ArbitrageVault: zero address");
+        require(stakedUsdeToken != address(0), "ArbitrageVault: zero sUSDe address");
+
+        stakedUsde = IStakedUSDe(stakedUsdeToken);
     }
 
     /* ========== PUBLIC FUNCTIONS ========== */
@@ -210,5 +247,152 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
         returns (string memory)
     {
         return VAULT_SYMBOL;
+    }
+
+    /* ========== PROXY MANAGEMENT ========== */
+
+    /**
+     * @notice TEST FUNCTION: Initiates unstake operation through proxy
+     * @param sUsdeAmount Amount of sUSDe to unstake
+     * @return expectedAssets Expected USDe amount after cooldown
+     * @dev This is a temporary function for Phase 2 testing.
+     *      Will be replaced by full executeArbitrage() in Phase 5.
+     */
+    function initiateUnstakeForTesting(uint256 sUsdeAmount)
+        external
+        onlyOwner
+        returns (uint256 expectedAssets)
+    {
+        require(sUsdeAmount > 0, "Amount must be > 0");
+
+        // Allocate free proxy
+        address proxyAddress = _allocateFreeProxy();
+
+        // Transfer sUSDe from vault to proxy
+        IERC20(address(stakedUsde)).safeTransfer(proxyAddress, sUsdeAmount);
+
+        // Get proxy instance and initiate unstake
+        UnstakeProxy proxy = UnstakeProxy(proxyAddress);
+        expectedAssets = proxy.initiateUnstake(sUsdeAmount);
+
+        return expectedAssets;
+    }
+
+    /**
+     * @notice TEST FUNCTION: Claims unstake through proxy after cooldown
+     * @param proxyAddress Address of proxy to claim from
+     * @dev This is a temporary function for Phase 2 testing.
+     *      Will be replaced by position-based claiming in Phase 4.
+     */
+    function claimUnstakeForTesting(address proxyAddress) external onlyOwner {
+        require(proxyAddress != address(0), "Invalid proxy");
+        require(proxyBusy[proxyAddress], "Proxy not busy");
+
+        // Claim through proxy
+        UnstakeProxy proxy = UnstakeProxy(proxyAddress);
+        proxy.claimUnstake(address(this));
+
+        // Release proxy
+        _releaseProxy(proxyAddress);
+    }
+
+    /**
+     * @notice Deploys new unstake proxy contracts
+     * @param count Number of proxies to deploy
+     * @dev Only callable by owner. Uses CREATE opcode for deployment.
+     *      Each proxy is owned by this vault and can perform one unstake at a time.
+     */
+    function deployProxies(uint256 count) external onlyOwner {
+        require(count > 0, "Count must be > 0");
+        require(count <= 100, "Too many proxies at once");
+
+        address usdeToken = asset();
+
+        for (uint256 i = 0; i < count; i++) {
+            // Deploy new proxy with vault as owner
+            UnstakeProxy proxy = new UnstakeProxy(
+                address(stakedUsde),
+                usdeToken,
+                address(this)
+            );
+
+            // Register proxy
+            unstakeProxies.push(address(proxy));
+            proxyBusy[address(proxy)] = false;
+        }
+
+        emit ProxiesDeployed(count, unstakeProxies.length);
+    }
+
+    /**
+     * @notice Returns the total number of deployed proxies
+     * @return Total proxy count
+     */
+    function getProxyCount() external view returns (uint256) {
+        return unstakeProxies.length;
+    }
+
+    /**
+     * @notice Returns the number of available (non-busy) proxies
+     * @return Number of proxies available for allocation
+     */
+    function getAvailableProxyCount() external view returns (uint256) {
+        uint256 count = 0;
+        for (uint256 i = 0; i < unstakeProxies.length; i++) {
+            if (!proxyBusy[unstakeProxies[i]]) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /**
+     * @notice Returns all proxy addresses and their busy status
+     * @return proxies Array of proxy addresses
+     * @return busy Array of busy status for each proxy
+     */
+    function getProxyStatus()
+        external
+        view
+        returns (address[] memory proxies, bool[] memory busy)
+    {
+        proxies = unstakeProxies;
+        busy = new bool[](proxies.length);
+
+        for (uint256 i = 0; i < proxies.length; i++) {
+            busy[i] = proxyBusy[proxies[i]];
+        }
+    }
+
+    /* ========== INTERNAL FUNCTIONS ========== */
+
+    /**
+     * @notice Allocates a free proxy for unstaking operation
+     * @return proxy Address of allocated proxy
+     * @dev Marks proxy as busy upon allocation. Reverts if no proxy available.
+     */
+    function _allocateFreeProxy() internal returns (address proxy) {
+        for (uint256 i = 0; i < unstakeProxies.length; i++) {
+            if (!proxyBusy[unstakeProxies[i]]) {
+                proxy = unstakeProxies[i];
+                proxyBusy[proxy] = true;
+                emit ProxyAllocated(proxy);
+                return proxy;
+            }
+        }
+        revert("No proxies available");
+    }
+
+    /**
+     * @notice Releases a proxy back to the available pool
+     * @param proxy Address of proxy to release
+     * @dev Marks proxy as not busy
+     */
+    function _releaseProxy(address proxy) internal {
+        require(proxy != address(0), "Invalid proxy");
+        require(proxyBusy[proxy], "Proxy not busy");
+
+        proxyBusy[proxy] = false;
+        emit ProxyReleased(proxy);
     }
 }
