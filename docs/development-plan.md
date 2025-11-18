@@ -16,72 +16,140 @@ Development of ArbitrageVault.sol - an ERC-4626 compliant vault that performs au
 - Initial test suite
 
 **Acceptance Criteria:**
-- Users can deposit USDe and receive shares
-- Users can withdraw USDe by burning shares
-- 100% test coverage for implemented functions
+- Users can deposit USDe and receive shares ✓
+- Users can withdraw USDe by burning shares ✓
+- 100% test coverage for implemented functions ✓
 
 ---
 
-### Phase 2: Position Tracking System
+### Phase 2: Ethena Protocol Integration & Proxy Orchestration
 **Status:** Pending
 **Dependencies:** Phase 1
-**Related ADRs:** ADR-003
+**Related ADRs:** ADR-002, ADR-008
+**Priority:** HIGH (foundational, everything depends on this)
 
 **Scope:**
-- Position struct and storage
-- Position lifecycle (open/claim)
-- Accrual rate mechanism
-- Position-related events and view functions
+- Ethena protocol interfaces (`IStakedUSDe`, `IUSDe`)
+- `UnstakeProxy` contract (minimal, single-purpose)
+- Proxy pool management in vault
+- Real `convertToAssets()` integration for profit calculation
+- Mock Ethena contracts for testing
+
+**Deliverables:**
+- `interfaces/IStakedUSDe.sol`
+- `interfaces/IUSDe.sol`
+- `contracts/UnstakeProxy.sol`
+- Proxy management functions in `ArbitrageVault.sol`
+- Mock Ethena contracts for tests
+- Full test suite for proxy orchestration
 
 **Acceptance Criteria:**
-- Positions can be opened with sUSDe amount and book value
-- Positions can be claimed after 7-day cooldown
-- Accrual tracking updates correctly
+- Can call Ethena `convertToAssets()` for real profit calculation
+- Can allocate/release proxies correctly
+- Proxy initiate unstake via `cooldownShares()` (returns expected USDe amount)
+- Proxy claim unstake via `unstake()` after 7 days (sends USDe to vault)
+- Tests cover all proxy lifecycle scenarios
+- Vault contains factory logic to deploy new proxies via `deployProxies(count)`
+
+**Key Implementation Details:**
+- Proxies are minimal wrappers (no complex logic)
+- Vault tracks `proxyBusy` mapping
+- If no free proxy: revert "No proxies available"
+- Admin monitors and deploys proxies as needed
 
 ---
 
-### Phase 3: NAV Calculation Engine
+### Phase 3: Access Control & Parameter Management
 **Status:** Pending
-**Dependencies:** Phase 2
+**Dependencies:** Phase 1
+**Related ADRs:** ADR-005
+**Priority:** MEDIUM (can be developed in parallel with Phase 2)
+
+**Scope:**
+- Keeper whitelist system
+- `onlyKeeper` modifier
+- Parameter storage (fee %, profit threshold, etc.)
+- Owner functions for parameter management
+- Events for access control changes
+
+**Deliverables:**
+- Keeper management in `ArbitrageVault.sol`
+- Parameter state variables
+- Access control tests
+
+**Acceptance Criteria:**
+- Only owner can add/remove keepers
+- `onlyKeeper` modifier correctly restricts access
+- Parameter setters validate inputs
+- Events emitted on all changes
+
+---
+
+### Phase 4: Position Tracking & NAV Calculation
+**Status:** Pending
+**Dependencies:** Phase 2 (Ethena integration)
 **Related ADRs:** ADR-002, ADR-003
 
 **Scope:**
-- Time-weighted profit accrual formula
-- Full `totalAssets()` implementation
-- Position valuation helpers
-- Integration with Ethena's `convertToAssets()`
+- Position struct with proxy tracking
+- Accrual rate mechanism for O(1) NAV
+- Time-weighted profit accrual
+- NAV calculation using real Ethena `convertToAssets()`
+- Position open/claim lifecycle
+- Integration with proxy system
+
+**Deliverables:**
+- Position tracking in `ArbitrageVault.sol`
+- `totalAssets()` override with real NAV calculation
+- `_openPosition()` internal function
+- `claimPosition()` public function
+- Full position lifecycle tests
 
 **Acceptance Criteria:**
-- `totalAssets()` correctly reflects idle USDe + position values
-- NAV increases linearly over 7-day cooldown period
-- Share price is always accurate
+- Positions track real Ethena profit via `convertToAssets()`
+- NAV reflects actual sUSDe value
+- Time-weighted accrual works correctly
+- Positions store assigned proxy address
+- Claiming via correct proxy works
+- 100% test coverage for position logic
 
 ---
 
-### Phase 4: Arbitrage Execution Module
+### Phase 5: Arbitrage Execution
 **Status:** Pending
-**Dependencies:** Phase 3
-**Related ADRs:** ADR-004, ADR-005
+**Dependencies:** Phase 2, Phase 3, Phase 4
+**Related ADRs:** ADR-004
 
 **Scope:**
-- Keeper whitelist and access control
 - `executeArbitrage()` function
-- Minimum profit threshold validation
-- DEX swap integration
-- Ethena staking integration
+- DEX swap integration (generic calldata)
+- Profit threshold validation
+- Slippage protection
+- Proxy allocation during execution
+- Full arbitrage flow
+
+**Deliverables:**
+- `executeArbitrage()` implementation
+- Swap execution logic
+- Integration with Phases 2, 3, 4
+- Full arbitrage flow tests
 
 **Acceptance Criteria:**
-- Only authorized keepers can execute arbitrage
-- Arbitrage only executes if profit threshold is met
-- New positions are correctly opened after arbitrage
-- Events emitted for transparency
+- Only authorized keepers can execute
+- Validates minimum profit threshold
+- Allocates free proxy (reverts if none available)
+- Executes DEX swap correctly
+- Initiates unstake via proxy
+- Opens position with correct data
+- Events emitted for monitoring
 
 ---
 
-### Phase 5: Withdrawal Queue System
+### Phase 6: Withdrawal Queue System
 **Status:** Pending
-**Dependencies:** Phase 1, Phase 3
+**Dependencies:** Phase 1, Phase 4
 **Related ADRs:** ADR-001, ADR-006
+**Priority:** MEDIUM (can be developed in parallel with Phase 5)
 
 **Scope:**
 - Withdrawal request queue (FIFO)
@@ -90,19 +158,27 @@ Development of ArbitrageVault.sol - an ERC-4626 compliant vault that performs au
 - Integration with position claiming
 - 7-day maximum guarantee tracking
 
+**Deliverables:**
+- Queue data structures
+- Request management functions
+- Fulfillment logic
+- Queue tests
+
 **Acceptance Criteria:**
-- Users can request withdrawals when liquidity is insufficient
-- Requests are fulfilled in FIFO order
-- Partial fulfillments are supported
-- Cancellations work correctly
-- 7-day maximum withdrawal time is enforced
+- Users can request withdrawals when liquidity insufficient
+- Requests fulfilled in FIFO order
+- Partial fulfillment works correctly
+- Cancellations work
+- 7-day maximum withdrawal time enforced
+- Integration with proxy-based position claiming
 
 ---
 
-### Phase 6: Fee Collection Mechanism
+### Phase 7: Fee Collection Mechanism
 **Status:** Pending
-**Dependencies:** Phase 3
+**Dependencies:** Phase 4
 **Related ADRs:** ADR-007
+**Priority:** LOW (can be developed in parallel with Phases 5, 6)
 
 **Scope:**
 - Performance fee calculation
@@ -110,31 +186,44 @@ Development of ArbitrageVault.sol - an ERC-4626 compliant vault that performs au
 - Fee recipient management
 - Fee withdrawal functionality
 
+**Deliverables:**
+- Fee collection logic
+- Fee management functions
+- Fee tests
+
 **Acceptance Criteria:**
-- Fees are collected continuously on external calls
+- Fees collected continuously on external calls
 - Performance fee correctly calculated from realized profits
 - Fee recipient can withdraw accumulated fees
-- Fee collection doesn't affect user share values unfairly
+- Fee collection doesn't affect share values unfairly
 
 ---
 
-### Phase 7: Parameter Management and Access Control
+### Phase 8: Integration Testing & Finalization
 **Status:** Pending
-**Dependencies:** Phase 4, Phase 6
-**Related ADRs:** ADR-005
+**Dependencies:** Phases 5, 6, 7
+**Related ADRs:** All
 
 **Scope:**
-- Owner-controlled parameter setters
-- Parameter validation
-- Parameter change events
-- Emergency functions (if needed)
-- Integration test suite
+- Full end-to-end integration tests
+- Multi-user scenarios
+- Edge case testing
+- Gas optimization
+- Security review preparation
+
+**Deliverables:**
+- Comprehensive integration test suite
+- Gas benchmarks
+- Security checklist completion
+- Documentation finalization
 
 **Acceptance Criteria:**
-- Only owner can change parameters
-- Parameter validation prevents invalid values
-- All parameter changes emit events
-- Full integration tests pass
+- Full deposit → arbitrage → claim → withdraw flow works
+- Multiple users with different entry/exit times
+- Fee collection across full lifecycle
+- Queue fulfillment under various conditions
+- Gas consumption within acceptable limits
+- All edge cases covered
 
 ---
 
@@ -143,7 +232,7 @@ Development of ArbitrageVault.sol - an ERC-4626 compliant vault that performs au
 ### Testing & Quality Assurance
 - Achieve 100% line and branch coverage
 - Run Slither static analysis
-- Run invariant/fuzz tests
+- Run invariant/fuzz tests with Foundry
 - Gas optimization review
 - Code review checklist completion
 
@@ -161,47 +250,84 @@ Development of ArbitrageVault.sol - an ERC-4626 compliant vault that performs au
 - Initial configuration values
 - Deployment scripts
 - Post-deployment verification scripts
+- Initial proxy deployment (e.g., 5 proxies)
 
 ---
 
 ## Dependencies Graph
 
 ```
-Phase 1 (Core Vault)
-    ├── Phase 2 (Position Tracking)
-    │       └── Phase 3 (NAV Calculation)
-    │               ├── Phase 4 (Arbitrage)
-    │               └── Phase 6 (Fees)
-    └── Phase 5 (Withdrawal Queue)
+Phase 1: Core Vault ✅
+    │
+    ├─────► Phase 2: Ethena Integration + Proxies (FOUNDATIONAL)
+    │           │
+    │           └──► Phase 4: Position Tracking + NAV
+    │                   ├──► Phase 5: Arbitrage Execution
+    │                   ├──► Phase 6: Withdrawal Queue
+    │                   └──► Phase 7: Fee Collection
+    │
+    └─────► Phase 3: Access Control (can parallel Phase 2)
+                └──► Phase 5: Arbitrage Execution
 
-Phase 7 depends on: Phase 4, Phase 6
+All → Phase 8: Integration Testing
 ```
+
+**Parallelization Opportunities:**
+- Phase 2 and Phase 3 can be developed **simultaneously** (independent)
+- Phase 5, 6, 7 can be developed **simultaneously** after Phase 4 completes
 
 ---
 
 ## Timeline Estimate
 
-| Phase | Estimated Duration |
-|-------|-------------------|
-| Phase 1: Core Vault | 1-2 days ✅ |
-| Phase 2: Position Tracking | 1 day |
-| Phase 3: NAV Calculation | 2 days |
-| Phase 4: Arbitrage | 2-3 days |
-| Phase 5: Withdrawal Queue | 2-3 days |
-| Phase 6: Fee Collection | 1 day |
-| Phase 7: Parameter Management | 1 day |
-| **Total Core Development** | **10-14 days** |
-| Testing & Documentation | 3-5 days |
-| **Total Project Duration** | **2-3 weeks** |
+| Phase | Estimated Duration | Can Parallel With |
+|-------|-------------------|-------------------|
+| Phase 1: Core Vault | 1-2 days ✅ | - |
+| Phase 2: Ethena + Proxies | 2-3 days | Phase 3 |
+| Phase 3: Access Control | 1 day | Phase 2 |
+| Phase 4: Position + NAV | 2 days | - |
+| Phase 5: Arbitrage | 2-3 days | Phase 6, 7 |
+| Phase 6: Withdrawal Queue | 2-3 days | Phase 5, 7 |
+| Phase 7: Fee Collection | 1 day | Phase 5, 6 |
+| Phase 8: Integration | 1-2 days | - |
+| **Total Core Development** | **12-17 days** | |
+| Testing & Documentation | 3-5 days | |
+| **Total Project Duration** | **2-3 weeks** | |
+
+**Optimistic Timeline (with parallelization):**
+- Week 1: Phase 1 ✅, Phase 2 + 3 (parallel)
+- Week 2: Phase 4, then Phase 5 + 6 + 7 (parallel)
+- Week 3: Phase 8, QA, Documentation
 
 ---
 
 ## Success Criteria
 
 - All functional requirements (FR-01 to FR-08) implemented
+- All ADRs (including ADR-008) implemented as specified
 - 100% test coverage achieved
-- All ADRs implemented as specified
 - Gas optimized (< 500k gas for deposit/withdraw)
 - Zero critical/high severity issues from static analysis
 - Code follows CODING_STANDARDS.md requirements
 - All functions have complete NatSpec documentation
+- Proxy orchestration working correctly with multiple concurrent unstakes
+
+---
+
+## Key Architectural Decisions
+
+1. **Phase 2 moved to front** - Ethena integration is foundational, everything depends on it
+2. **Proxy pattern (ADR-008)** - Enables concurrent unstakes, critical for capital efficiency
+3. **Access Control independent** - Can be developed in parallel with Ethena integration
+4. **Phase 4 combines Position + NAV** - These are tightly coupled, no benefit to splitting
+5. **Phases 5-7 can parallelize** - After Phase 4, these features are independent
+
+---
+
+## Notes
+
+- Phase 2 is **blocking** for Phases 4-7 - prioritize completion
+- Phase 3 is **non-blocking** - can develop alongside Phase 2
+- Admin must manually deploy proxies - no automatic deployment
+- If no free proxy available during arbitrage: revert with clear error
+- Keeper monitors proxy availability off-chain

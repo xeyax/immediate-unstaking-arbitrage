@@ -52,15 +52,31 @@ Track only total book value and total expected profit; no individual positions. 
 - Maintain accumulated realized profit from all claimed positions.
 - Before any operation: finalize matured positions, update accumulated profit based on time elapsed, reset timestamp.
 
+**Position Struct**
+```solidity
+struct Position {
+    uint256 sUsdeAmount;        // sUSDe shares in unstake
+    uint256 bookValue;          // USDe paid to acquire sUSDe
+    uint256 expectedAssets;     // Expected USDe from Ethena (returned by cooldownShares)
+    uint256 startTime;          // When unstake initiated
+    bool claimed;               // Whether position has been claimed
+    address proxyContract;      // Which UnstakeProxy holds this unstake (see ADR-008)
+}
+```
+
 **Opening Position**
-- Calculate expected profit for this position.
+- Call proxy to initiate unstake; proxy calls `cooldownShares()` which returns expected USDe amount.
+- Calculate expected profit: expectedAssets - bookValue.
 - Increase accrual rate by (expected profit / cooldown period).
-- Store position with individual tracking data.
+- Store position with all tracking data including expectedAssets and assigned proxy (per ADR-008).
 
 **Claiming Position**
-- Decrease accrual rate by (position's expected profit / cooldown period).
-- Add position's profit to accumulated realized profit.
-- Mark position as claimed.
+- Retrieve proxy address and expectedAssets from position struct.
+- Call proxy to claim unstake from Ethena protocol (see ADR-008).
+- Calculate expected profit: expectedAssets - bookValue.
+- Decrease accrual rate by (expected profit / cooldown period).
+- Add position's actual profit to accumulated realized profit.
+- Mark position as claimed and release proxy.
 
 **NAV Calculation (O(1))**
 - NAV = idle USDe + accumulated realized profit + (accrual rate × time elapsed since last update).

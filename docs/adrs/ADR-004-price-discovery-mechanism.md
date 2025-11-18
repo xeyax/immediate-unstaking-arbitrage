@@ -63,12 +63,14 @@ Keeper submits expected spread; contract validates against MIN_SPREAD threshold 
 **Execution Flow**
 1. Validate keeper authorization
 2. Validate capital availability
-3. Calculate expected profit: sUSDe.convertToAssets(expected_sUSDe_amount) - amountIn
-4. Validate minimum profit: require(expectedProfit >= (amountIn × minProfitThreshold) / 10000)
-5. Execute swap with minAmountOut slippage protection
-6. Initiate unstaking for received sUSDe
-7. Calculate actual profit via Ethena protocol contracts
-8. Emit ArbitrageExecuted event with actual profit for off-chain monitoring
+3. Allocate free UnstakeProxy for this operation (see ADR-008)
+4. Calculate expected profit: sUSDe.convertToAssets(expected_sUSDe_amount) - amountIn
+5. Validate minimum profit: require(expectedProfit >= (amountIn × minProfitThreshold) / 10000)
+6. Execute swap with minAmountOut slippage protection
+7. Transfer sUSDe to allocated proxy and initiate unstaking via proxy (see ADR-008)
+8. Open position with proxy address recorded
+9. Calculate actual profit via Ethena protocol contracts
+10. Emit ArbitrageExecuted event with actual profit for off-chain monitoring
 
 **Key Points**
 - No oracle calls or on-chain price validation

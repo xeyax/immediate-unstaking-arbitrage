@@ -56,6 +56,7 @@ Only authorized keepers can finalize positions, no automatic finalization on wit
 - withdraw() / redeem() functions check USDe.balanceOf(vault) for idle capital.
 - If idle capital insufficient, call _finalizeMaturedPositions() internal function.
 - _finalizeMaturedPositions() iterates positions where block.timestamp >= startTime + COOLDOWN_PERIOD.
+- For each matured position: retrieve proxy address and call proxy.claimUnstake() (see ADR-008).
 - Finalize positions until sufficient liquidity available or no more matured positions.
 - If still insufficient, add to withdrawal queue (see ADR-001 for queue details).
 
