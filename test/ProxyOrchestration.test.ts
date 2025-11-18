@@ -1,14 +1,14 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
 import { loadFixture, time } from "@nomicfoundation/hardhat-toolbox/network-helpers";
-import { ArbitrageVault, MockERC20, MockStakedUSDe, UnstakeProxy } from "../typechain-types";
+import { ArbitrageVaultHarness, MockERC20, MockStakedUSDe, UnstakeProxy } from "../typechain-types";
 import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 
 describe("Proxy Orchestration (Phase 2)", function () {
   // Cooldown duration: 7 days in seconds
   const COOLDOWN_DURATION = 7 * 24 * 60 * 60;
 
-  // Fixture to deploy vault with Ethena integration
+  // Fixture to deploy vault harness with Ethena integration
   async function deployVaultWithEthenaFixture() {
     const [owner, user1, keeper]: HardhatEthersSigner[] = await ethers.getSigners();
 
@@ -25,9 +25,9 @@ describe("Proxy Orchestration (Phase 2)", function () {
     );
     await stakedUsde.waitForDeployment();
 
-    // Deploy ArbitrageVault
-    const ArbitrageVaultFactory = await ethers.getContractFactory("ArbitrageVault");
-    const vault: ArbitrageVault = await ArbitrageVaultFactory.deploy(
+    // Deploy ArbitrageVaultHarness (test version with exposed functions)
+    const ArbitrageVaultHarnessFactory = await ethers.getContractFactory("ArbitrageVaultHarness");
+    const vault: ArbitrageVaultHarness = await ArbitrageVaultHarnessFactory.deploy(
       await usdeToken.getAddress(),
       await stakedUsde.getAddress()
     );

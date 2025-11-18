@@ -252,51 +252,6 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
     /* ========== PROXY MANAGEMENT ========== */
 
     /**
-     * @notice TEST FUNCTION: Initiates unstake operation through proxy
-     * @param sUsdeAmount Amount of sUSDe to unstake
-     * @return expectedAssets Expected USDe amount after cooldown
-     * @dev This is a temporary function for Phase 2 testing.
-     *      Will be replaced by full executeArbitrage() in Phase 5.
-     */
-    function initiateUnstakeForTesting(uint256 sUsdeAmount)
-        external
-        onlyOwner
-        returns (uint256 expectedAssets)
-    {
-        require(sUsdeAmount > 0, "Amount must be > 0");
-
-        // Allocate free proxy
-        address proxyAddress = _allocateFreeProxy();
-
-        // Transfer sUSDe from vault to proxy
-        IERC20(address(stakedUsde)).safeTransfer(proxyAddress, sUsdeAmount);
-
-        // Get proxy instance and initiate unstake
-        UnstakeProxy proxy = UnstakeProxy(proxyAddress);
-        expectedAssets = proxy.initiateUnstake(sUsdeAmount);
-
-        return expectedAssets;
-    }
-
-    /**
-     * @notice TEST FUNCTION: Claims unstake through proxy after cooldown
-     * @param proxyAddress Address of proxy to claim from
-     * @dev This is a temporary function for Phase 2 testing.
-     *      Will be replaced by position-based claiming in Phase 4.
-     */
-    function claimUnstakeForTesting(address proxyAddress) external onlyOwner {
-        require(proxyAddress != address(0), "Invalid proxy");
-        require(proxyBusy[proxyAddress], "Proxy not busy");
-
-        // Claim through proxy
-        UnstakeProxy proxy = UnstakeProxy(proxyAddress);
-        proxy.claimUnstake(address(this));
-
-        // Release proxy
-        _releaseProxy(proxyAddress);
-    }
-
-    /**
      * @notice Deploys new unstake proxy contracts
      * @param count Number of proxies to deploy
      * @dev Only callable by owner. Uses CREATE opcode for deployment.
