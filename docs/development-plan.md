@@ -23,39 +23,56 @@ Development of ArbitrageVault.sol - an ERC-4626 compliant vault that performs au
 ---
 
 ### Phase 2: Ethena Protocol Integration & Proxy Orchestration
-**Status:** Pending
+**Status:** Completed ✅
 **Dependencies:** Phase 1
 **Related ADRs:** ADR-002, ADR-008
 **Priority:** HIGH (foundational, everything depends on this)
 
 **Scope:**
-- Ethena protocol interfaces (`IStakedUSDe`, `IUSDe`)
-- `UnstakeProxy` contract (minimal, single-purpose)
-- Proxy pool management in vault
-- Real `convertToAssets()` integration for profit calculation
-- Mock Ethena contracts for testing
+- Ethena protocol interfaces (`IStakedUSDe`, `IUSDe`) ✓
+- `UnstakeProxy` contract (minimal, single-purpose) ✓
+- Proxy pool management in vault ✓
+- Real `convertToAssets()` integration for profit calculation ✓
+- Mock Ethena contracts for testing ✓
 
 **Deliverables:**
-- `interfaces/IStakedUSDe.sol`
-- `interfaces/IUSDe.sol`
-- `contracts/UnstakeProxy.sol`
-- Proxy management functions in `ArbitrageVault.sol`
-- Mock Ethena contracts for tests
-- Full test suite for proxy orchestration
+- `interfaces/IStakedUSDe.sol` ✓ (35 lines, minimal interface)
+- `interfaces/IUSDe.sol` ✓ (14 lines)
+- `contracts/UnstakeProxy.sol` ✓ (107 lines)
+- `contracts/mocks/MockStakedUSDe.sol` ✓ (136 lines with authorization)
+- Proxy management functions in `ArbitrageVault.sol` ✓
+- `contracts/test/ArbitrageVaultHarness.sol` ✓ (test harness pattern)
+- Full test suite for proxy orchestration ✓ (23 tests in ProxyOrchestration.test.ts)
 
 **Acceptance Criteria:**
-- Can call Ethena `convertToAssets()` for real profit calculation
-- Can allocate/release proxies correctly
-- Proxy initiate unstake via `cooldownShares()` (returns expected USDe amount)
-- Proxy claim unstake via `unstake()` after 7 days (sends USDe to vault)
-- Tests cover all proxy lifecycle scenarios
-- Vault contains factory logic to deploy new proxies via `deployProxies(count)`
+- Can call Ethena `convertToAssets()` for real profit calculation ✓
+- Can allocate/release proxies correctly ✓
+- Proxy initiate unstake via `cooldownShares()` (returns expected USDe amount) ✓
+- Proxy claim unstake via `unstake()` after 7 days (sends USDe to vault) ✓
+- Tests cover all proxy lifecycle scenarios ✓
+- Vault contains factory logic to deploy new proxies via `deployProxies(count)` ✓
 
 **Key Implementation Details:**
-- Proxies are minimal wrappers (no complex logic)
-- Vault tracks `proxyBusy` mapping
-- If no free proxy: revert "No proxies available"
-- Admin monitors and deploys proxies as needed
+- Proxies are minimal wrappers (no complex logic) ✓
+- Vault tracks `proxyBusy` mapping ✓
+- Round-robin allocation with `lastAllocatedIndex` for O(1) average case ✓
+- If no free proxy: revert "No proxies available" ✓
+- Admin monitors and deploys proxies as needed ✓
+- Test harness pattern separates test code from production contracts ✓
+
+**Improvements Made:**
+- Removed 113 lines of unused code (cooldownAssets, convertToShares, recoverTokens, etc.)
+- Implemented round-robin proxy allocation for efficiency
+- Added authorization checks in MockStakedUSDe (owner or allowance)
+- Created ArbitrageVaultHarness for clean test separation
+
+**Test Coverage:** 23 tests covering:
+- Proxy deployment (5 tests)
+- Status tracking (4 tests)
+- Proxy functionality (3 tests)
+- Round-robin allocation (2 tests)
+- Full lifecycle (6 tests)
+- Exchange rate integration (3 tests)
 
 ---
 
@@ -280,22 +297,22 @@ All → Phase 8: Integration Testing
 
 ## Timeline Estimate
 
-| Phase | Estimated Duration | Can Parallel With |
-|-------|-------------------|-------------------|
-| Phase 1: Core Vault | 1-2 days ✅ | - |
-| Phase 2: Ethena + Proxies | 2-3 days | Phase 3 |
-| Phase 3: Access Control | 1 day | Phase 2 |
-| Phase 4: Position + NAV | 2 days | - |
-| Phase 5: Arbitrage | 2-3 days | Phase 6, 7 |
-| Phase 6: Withdrawal Queue | 2-3 days | Phase 5, 7 |
-| Phase 7: Fee Collection | 1 day | Phase 5, 6 |
-| Phase 8: Integration | 1-2 days | - |
-| **Total Core Development** | **12-17 days** | |
-| Testing & Documentation | 3-5 days | |
-| **Total Project Duration** | **2-3 weeks** | |
+| Phase | Estimated Duration | Can Parallel With | Status |
+|-------|-------------------|-------------------|--------|
+| Phase 1: Core Vault | 1-2 days | - | ✅ Completed |
+| Phase 2: Ethena + Proxies | 2-3 days | Phase 3 | ✅ Completed |
+| Phase 3: Access Control | 1 day | Phase 2 | ⏳ Next |
+| Phase 4: Position + NAV | 2 days | - | Pending |
+| Phase 5: Arbitrage | 2-3 days | Phase 6, 7 | Pending |
+| Phase 6: Withdrawal Queue | 2-3 days | Phase 5, 7 | Pending |
+| Phase 7: Fee Collection | 1 day | Phase 5, 6 | Pending |
+| Phase 8: Integration | 1-2 days | - | Pending |
+| **Total Core Development** | **12-17 days** | | **~3 days done** |
+| Testing & Documentation | 3-5 days | | |
+| **Total Project Duration** | **2-3 weeks** | | |
 
 **Optimistic Timeline (with parallelization):**
-- Week 1: Phase 1 ✅, Phase 2 + 3 (parallel)
+- Week 1: Phase 1 ✅, Phase 2 ✅ (Phase 3 next)
 - Week 2: Phase 4, then Phase 5 + 6 + 7 (parallel)
 - Week 3: Phase 8, QA, Documentation
 
@@ -303,6 +320,7 @@ All → Phase 8: Integration Testing
 
 ## Success Criteria
 
+**Overall:**
 - All functional requirements (FR-01 to FR-08) implemented
 - All ADRs (including ADR-008) implemented as specified
 - 100% test coverage achieved
@@ -310,7 +328,16 @@ All → Phase 8: Integration Testing
 - Zero critical/high severity issues from static analysis
 - Code follows CODING_STANDARDS.md requirements
 - All functions have complete NatSpec documentation
-- Proxy orchestration working correctly with multiple concurrent unstakes
+
+**Phase 1 & 2 (Completed):**
+- ✅ ERC-4626 vault with deposit/withdraw functionality
+- ✅ Proxy orchestration working correctly with multiple concurrent unstakes
+- ✅ Round-robin proxy allocation for efficiency
+- ✅ Ethena protocol integration (convertToAssets, cooldownShares, unstake)
+- ✅ Test harness pattern for clean separation of test code
+- ✅ 42 tests passing (19 Phase 1 + 23 Phase 2)
+- ✅ Mock contracts with proper authorization
+- ✅ Minimal interfaces (unused code removed)
 
 ---
 
