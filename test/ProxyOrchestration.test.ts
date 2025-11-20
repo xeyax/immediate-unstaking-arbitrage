@@ -183,6 +183,78 @@ describe("Proxy Orchestration (Phase 2)", function () {
     });
   });
 
+  describe("Round-Robin Allocation", function () {
+    it("Should allocate proxies in round-robin order", async function () {
+      const { vault, stakedUsde, owner } = await loadFixture(deployVaultWithEthenaFixture);
+
+      // Deploy 3 proxies
+      await vault.connect(owner).deployProxies(3);
+      const proxy0 = await vault.unstakeProxies(0);
+      const proxy1 = await vault.unstakeProxies(1);
+      const proxy2 = await vault.unstakeProxies(2);
+
+      // Give vault sUSDe
+      const amount = ethers.parseEther("100");
+      await stakedUsde.mint(await vault.getAddress(), amount * 10n);
+
+      // First allocation: lastAllocatedIndex=0, tries (0+1)%3=1 first, then wraps
+      // So picks proxy1 first
+      await vault.connect(owner).initiateUnstakeForTesting(amount);
+      expect(await vault.proxyBusy(proxy1)).to.be.true;
+
+      // Second allocation: lastAllocatedIndex=1, tries (1+1)%3=2
+      // Picks proxy2
+      await vault.connect(owner).initiateUnstakeForTesting(amount);
+      expect(await vault.proxyBusy(proxy2)).to.be.true;
+
+      // Third allocation: lastAllocatedIndex=2, tries (2+1)%3=0
+      // Picks proxy0
+      await vault.connect(owner).initiateUnstakeForTesting(amount);
+      expect(await vault.proxyBusy(proxy0)).to.be.true;
+
+      // All busy now
+      expect(await vault.getAvailableProxyCount()).to.equal(0);
+
+      // Fast forward and release proxy1
+      await time.increase(COOLDOWN_DURATION + 1);
+      await vault.connect(owner).claimUnstakeForTesting(proxy1);
+      expect(await vault.proxyBusy(proxy1)).to.be.false;
+
+      // Next allocation should pick proxy1 again (continues round-robin from last position)
+      await vault.connect(owner).initiateUnstakeForTesting(amount);
+      expect(await vault.proxyBusy(proxy1)).to.be.true;
+    });
+
+    it("Should handle sequential releases efficiently", async function () {
+      const { vault, stakedUsde, owner } = await loadFixture(deployVaultWithEthenaFixture);
+
+      // Deploy 5 proxies
+      await vault.connect(owner).deployProxies(5);
+
+      // Give vault sUSDe
+      const amount = ethers.parseEther("100");
+      await stakedUsde.mint(await vault.getAddress(), amount * 10n);
+
+      // Fill all proxies
+      for (let i = 0; i < 5; i++) {
+        await vault.connect(owner).initiateUnstakeForTesting(amount);
+      }
+
+      // Fast forward
+      await time.increase(COOLDOWN_DURATION + 1);
+
+      // Release and immediately reallocate - should be very efficient (1 iteration)
+      for (let i = 0; i < 5; i++) {
+        const proxyAddress = await vault.unstakeProxies(i);
+        await vault.connect(owner).claimUnstakeForTesting(proxyAddress);
+        await vault.connect(owner).initiateUnstakeForTesting(amount);
+      }
+
+      // All should be busy again
+      expect(await vault.getAvailableProxyCount()).to.equal(0);
+    });
+  });
+
   describe("Full Unstake Lifecycle", function () {
     it("Should complete full unstake lifecycle through vault", async function () {
       const { vault, stakedUsde, usdeToken, owner } = await loadFixture(deployVaultWithEthenaFixture);

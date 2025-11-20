@@ -51,6 +51,9 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
     /// @notice Mapping tracking which proxies are currently busy with active unstakes
     mapping(address proxy => bool isBusy) public proxyBusy;
 
+    /// @notice Index of last allocated proxy for round-robin allocation
+    uint256 private lastAllocatedIndex;
+
     /* ========== EVENTS ========== */
 
     /**
@@ -322,19 +325,30 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
     /* ========== INTERNAL FUNCTIONS ========== */
 
     /**
-     * @notice Allocates a free proxy for unstaking operation
+     * @notice Allocates a free proxy for unstaking operation using round-robin
      * @return proxy Address of allocated proxy
-     * @dev Marks proxy as busy upon allocation. Reverts if no proxy available.
+     * @dev Uses round-robin allocation starting from last allocated index.
+     *      This is efficient because proxies typically become available in the same
+     *      order they were allocated (all have same 7-day cooldown period).
+     *      Reverts if no proxy available.
      */
     function _allocateFreeProxy() internal returns (address proxy) {
-        for (uint256 i = 0; i < unstakeProxies.length; i++) {
-            if (!proxyBusy[unstakeProxies[i]]) {
-                proxy = unstakeProxies[i];
+        uint256 len = unstakeProxies.length;
+        require(len > 0, "No proxies deployed");
+
+        // Round-robin: start from (lastAllocated + 1) and wrap around
+        for (uint256 i = 0; i < len; i++) {
+            uint256 index = (lastAllocatedIndex + 1 + i) % len;
+
+            if (!proxyBusy[unstakeProxies[index]]) {
+                lastAllocatedIndex = index;
+                proxy = unstakeProxies[index];
                 proxyBusy[proxy] = true;
                 emit ProxyAllocated(proxy);
                 return proxy;
             }
         }
+
         revert("No proxies available");
     }
 
