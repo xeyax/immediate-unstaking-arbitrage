@@ -72,6 +72,39 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
     /// @notice Basis points denominator (100% = 10000 basis points)
     uint256 public constant BASIS_POINTS = 10000;
 
+    /// @notice Cooldown period for unstaking (7 days in seconds)
+    uint256 public constant COOLDOWN_PERIOD = 7 days;
+
+    /* ========== POSITION TRACKING ========== */
+
+    /// @notice Position data structure
+    struct Position {
+        uint256 sUsdeAmount;        // sUSDe shares in unstake
+        uint256 bookValue;          // USDe paid to acquire sUSDe
+        uint256 expectedAssets;     // Expected USDe from Ethena (returned by cooldownShares)
+        uint256 startTime;          // When unstake initiated
+        bool claimed;               // Whether position has been claimed
+        address proxyContract;      // Which UnstakeProxy holds this unstake
+    }
+
+    /// @notice Mapping of position ID to Position
+    mapping(uint256 => Position) public positions;
+
+    /// @notice Next position ID to use
+    uint256 public nextPositionId;
+
+    /// @notice Total number of active (unclaimed) positions
+    uint256 public activePositionCount;
+
+    /// @notice Accrual rate: profit per second across all active positions (scaled by 1e18)
+    uint256 public accrualRate;
+
+    /// @notice Last time accrual was updated
+    uint256 public lastAccrualUpdate;
+
+    /// @notice Accumulated realized profit from claimed positions
+    uint256 public accumulatedProfit;
+
     /* ========== EVENTS ========== */
 
     /**
@@ -150,6 +183,36 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
      */
     event MinProfitThresholdUpdated(uint256 oldThreshold, uint256 newThreshold);
 
+    /**
+     * @notice Emitted when a new position is opened
+     * @param positionId ID of the new position
+     * @param proxy Address of proxy handling the unstake
+     * @param sUsdeAmount Amount of sUSDe being unstaked
+     * @param expectedAssets Expected USDe amount after cooldown
+     * @param bookValue USDe spent to acquire sUSDe
+     */
+    event PositionOpened(
+        uint256 indexed positionId,
+        address indexed proxy,
+        uint256 sUsdeAmount,
+        uint256 expectedAssets,
+        uint256 bookValue
+    );
+
+    /**
+     * @notice Emitted when a position is claimed
+     * @param positionId ID of the claimed position
+     * @param proxy Address of proxy that was used
+     * @param usdeReceived Actual USDe received
+     * @param profit Realized profit
+     */
+    event PositionClaimed(
+        uint256 indexed positionId,
+        address indexed proxy,
+        uint256 usdeReceived,
+        uint256 profit
+    );
+
     /* ========== CONSTRUCTOR ========== */
 
     /**
@@ -179,6 +242,9 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
         performanceFee = 1000; // 10%
         feeRecipient = initialFeeRecipient;
         minProfitThreshold = 10; // 0.1%
+
+        // Initialize accrual tracking
+        lastAccrualUpdate = block.timestamp;
     }
 
     /* ========== PUBLIC FUNCTIONS ========== */
