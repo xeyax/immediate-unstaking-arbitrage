@@ -77,28 +77,55 @@ Development of ArbitrageVault.sol - an ERC-4626 compliant vault that performs au
 ---
 
 ### Phase 3: Access Control & Parameter Management
-**Status:** Pending
+**Status:** Completed ✅
 **Dependencies:** Phase 1
 **Related ADRs:** ADR-005
 **Priority:** MEDIUM (can be developed in parallel with Phase 2)
 
 **Scope:**
-- Keeper whitelist system
-- `onlyKeeper` modifier
-- Parameter storage (fee %, profit threshold, etc.)
-- Owner functions for parameter management
-- Events for access control changes
+- Keeper whitelist system ✓
+- `onlyKeeper` modifier ✓
+- Parameter storage (fee %, profit threshold, etc.) ✓
+- Owner functions for parameter management ✓
+- Events for access control changes ✓
 
 **Deliverables:**
-- Keeper management in `ArbitrageVault.sol`
-- Parameter state variables
-- Access control tests
+- Keeper management in `ArbitrageVault.sol` ✓
+  - `addKeeper(address)` / `removeKeeper(address)` functions
+  - `isKeeper` mapping for authorization
+- Parameter state variables ✓
+  - `performanceFee` (basis points, default 1000 = 10%, max 5000 = 50%)
+  - `feeRecipient` (address for fee collection)
+  - `minProfitThreshold` (basis points, default 10 = 0.1%)
+  - Constants: `MAX_PERFORMANCE_FEE`, `BASIS_POINTS`
+- Parameter setter functions ✓
+  - `setPerformanceFee(uint256)` with validation
+  - `setFeeRecipient(address)` with zero-address check
+  - `setMinProfitThreshold(uint256)` with range validation
+- Access control tests ✓ (23 tests in AccessControl.test.ts)
 
 **Acceptance Criteria:**
-- Only owner can add/remove keepers
-- `onlyKeeper` modifier correctly restricts access
-- Parameter setters validate inputs
-- Events emitted on all changes
+- Only owner can add/remove keepers ✓
+- `onlyKeeper` modifier correctly restricts access ✓
+- Parameter setters validate inputs ✓
+- Events emitted on all changes ✓
+- Multiple keepers supported ✓
+- Performance fee capped at 50% for depositor protection ✓
+
+**Key Implementation Details:**
+- Owner-controlled governance model ✓
+- Keeper whitelist for operational redundancy ✓
+- Performance fee maximum enforced on-chain ✓
+- All parameter changes emit events for transparency ✓
+- Constructor requires initial fee recipient ✓
+
+**Test Coverage:** 23 tests covering:
+- Initialization (2 tests)
+- Keeper management (7 tests)
+- Performance fee management (5 tests)
+- Fee recipient management (3 tests)
+- Min profit threshold management (5 tests)
+- Updated existing tests with new constructor parameter (1 test)
 
 ---
 
@@ -296,8 +323,9 @@ All → Phase 8: Integration Testing
 **Current Status:**
 - ✅ Phase 1: Core Vault - Completed
 - ✅ Phase 2: Ethena Integration & Proxy Orchestration - Completed
-- ⏳ Phase 3: Access Control & Parameter Management - Next
-- Pending: Phases 4-8
+- ✅ Phase 3: Access Control & Parameter Management - Completed
+- ⏳ Phase 4: Position Tracking & NAV Calculation - Next
+- Pending: Phases 5-8
 
 ---
 
@@ -312,13 +340,16 @@ All → Phase 8: Integration Testing
 - Code follows CODING_STANDARDS.md requirements
 - All functions have complete NatSpec documentation
 
-**Phase 1 & 2 (Completed):**
+**Phase 1, 2 & 3 (Completed):**
 - ✅ ERC-4626 vault with deposit/withdraw functionality
 - ✅ Proxy orchestration working correctly with multiple concurrent unstakes
 - ✅ Round-robin proxy allocation for efficiency
 - ✅ Ethena protocol integration (convertToAssets, cooldownShares, unstake)
+- ✅ Keeper whitelist system with multiple keeper support
+- ✅ Parameter management (performance fee, fee recipient, min profit threshold)
+- ✅ Owner-controlled governance with on-chain validations
 - ✅ Test harness pattern for clean separation of test code
-- ✅ 42 tests passing (19 Phase 1 + 23 Phase 2)
+- ✅ 66 tests passing (19 Phase 1 + 23 Phase 2 + 23 Phase 3 + 1 updated)
 - ✅ Mock contracts with proper authorization
 - ✅ Minimal interfaces (unused code removed)
 
