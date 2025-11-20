@@ -10,11 +10,7 @@ Test harnesses expose internal functions and provide test helpers without pollut
 
 ### ArbitrageVaultHarness.sol
 
-**Purpose:** Testing proxy orchestration and internal functions during Phase 2-4.
-
-**Exposed Functions:**
-- `exposed_allocateFreeProxy()` - Direct access to internal proxy allocation
-- `exposed_releaseProxy()` - Direct access to internal proxy release
+**Purpose:** Testing proxy orchestration during Phase 2-4.
 
 **Test Helpers:**
 - `initiateUnstakeForTesting()` - Simulates arbitrage execution for Phase 2
@@ -38,9 +34,6 @@ const vault = await ArbitrageVaultHarnessFactory.deploy(usde, sUsde);
 // Use test helpers
 await vault.initiateUnstakeForTesting(amount);
 await vault.claimUnstakeForTesting(proxyAddress);
-
-// Or test internal functions directly
-await vault.exposed_allocateFreeProxy();
 ```
 
 ## Production Deployment

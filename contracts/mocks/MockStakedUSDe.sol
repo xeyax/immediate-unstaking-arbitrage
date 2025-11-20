@@ -101,42 +101,6 @@ contract MockStakedUSDe is ERC20, IStakedUSDe {
     }
 
     /**
-     * @notice Initiates cooldown for unstaking assets
-     * @param assets Amount of USDe assets desired
-     * @param owner Address initiating cooldown
-     * @return shares Amount of sUSDe shares burned
-     */
-    function cooldownAssets(uint256 assets, address owner)
-        external
-        override
-        returns (uint256 shares)
-    {
-        require(assets > 0, "Assets must be > 0");
-
-        // Calculate required shares
-        shares = convertToShares(assets);
-        require(balanceOf(owner) >= shares, "Insufficient balance");
-
-        // Authorization: caller must be owner or have allowance
-        if (msg.sender != owner) {
-            uint256 currentAllowance = allowance(owner, msg.sender);
-            require(currentAllowance >= shares, "Insufficient allowance");
-            _approve(owner, msg.sender, currentAllowance - shares);
-        }
-
-        // Burn sUSDe shares
-        _burn(owner, shares);
-
-        // Set cooldown
-        cooldowns[owner] = UserCooldown({
-            cooldownEnd: uint104(block.timestamp + cooldownDuration),
-            underlyingAmount: uint152(assets)
-        });
-
-        return shares;
-    }
-
-    /**
      * @notice Claims USDe after cooldown completes
      * @param receiver Address to receive USDe
      */
@@ -168,19 +132,5 @@ contract MockStakedUSDe is ERC20, IStakedUSDe {
         returns (uint256 assets)
     {
         return (shares * exchangeRate) / 1e18;
-    }
-
-    /**
-     * @notice Converts USDe assets to sUSDe shares
-     * @param assets Amount of USDe assets
-     * @return shares Equivalent sUSDe amount
-     */
-    function convertToShares(uint256 assets)
-        public
-        view
-        override
-        returns (uint256 shares)
-    {
-        return (assets * 1e18) / exchangeRate;
     }
 }

@@ -27,24 +27,6 @@ contract ArbitrageVaultHarness is ArbitrageVault {
         ArbitrageVault(usdeToken, stakedUsdeToken)
     {}
 
-    // ============ Exposed Internal Functions ============
-
-    /**
-     * @notice Exposes _allocateFreeProxy for direct testing
-     * @return proxy Address of allocated proxy
-     */
-    function exposed_allocateFreeProxy() external returns (address proxy) {
-        return _allocateFreeProxy();
-    }
-
-    /**
-     * @notice Exposes _releaseProxy for direct testing
-     * @param proxy Address of proxy to release
-     */
-    function exposed_releaseProxy(address proxy) external {
-        _releaseProxy(proxy);
-    }
-
     // ============ Test Helper Functions ============
 
     /**

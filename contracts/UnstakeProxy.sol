@@ -104,19 +104,4 @@ contract UnstakeProxy is Ownable {
 
         emit UsdeClaimed(received, receiver);
     }
-
-    /**
-     * @notice Emergency function to recover tokens sent by mistake
-     * @dev Only callable by owner (vault)
-     * @param token Address of token to recover
-     * @param amount Amount to recover
-     * @param receiver Address to receive recovered tokens
-     */
-    function recoverTokens(address token, uint256 amount, address receiver) external onlyOwner {
-        require(token != address(0), "Invalid token");
-        require(receiver != address(0), "Invalid receiver");
-        require(amount > 0, "Amount must be > 0");
-
-        IERC20(token).transfer(receiver, amount);
-    }
 }

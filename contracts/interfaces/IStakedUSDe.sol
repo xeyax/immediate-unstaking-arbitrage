@@ -19,15 +19,6 @@ interface IStakedUSDe is IERC20 {
     function cooldownShares(uint256 shares, address owner) external returns (uint256 assets);
 
     /**
-     * @notice Initiates cooldown period for unstaking assets
-     * @dev Alternative to cooldownShares - specify USDe amount instead of shares
-     * @param assets Amount of USDe assets to receive
-     * @param owner Address initiating the cooldown
-     * @return shares Amount of sUSDe shares burned
-     */
-    function cooldownAssets(uint256 assets, address owner) external returns (uint256 shares);
-
-    /**
      * @notice Claims USDe after cooldown period completes
      * @dev Must be called after 7-day cooldown period
      * @param receiver Address to receive the claimed USDe
@@ -41,17 +32,4 @@ interface IStakedUSDe is IERC20 {
      * @return assets Equivalent amount of USDe
      */
     function convertToAssets(uint256 shares) external view returns (uint256 assets);
-
-    /**
-     * @notice Converts USDe assets to sUSDe shares at current exchange rate
-     * @param assets Amount of USDe assets
-     * @return shares Equivalent amount of sUSDe shares
-     */
-    function convertToShares(uint256 assets) external view returns (uint256 shares);
-
-    /**
-     * @notice Gets the cooldown duration in seconds
-     * @return Duration of cooldown period (typically 7 days = 604800 seconds)
-     */
-    function cooldownDuration() external view returns (uint24);
 }
