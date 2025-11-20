@@ -28,7 +28,8 @@ describe("ArbitrageVault", function () {
     const ArbitrageVaultFactory = await ethers.getContractFactory("ArbitrageVault");
     const vault: ArbitrageVault = await ArbitrageVaultFactory.deploy(
       await usdeToken.getAddress(),
-      await stakedUsde.getAddress()
+      await stakedUsde.getAddress(),
+      owner.address // fee recipient
     );
     await vault.waitForDeployment();
 
@@ -62,20 +63,29 @@ describe("ArbitrageVault", function () {
 
     it("Should revert if USDe token address is zero", async function () {
       const ArbitrageVaultFactory = await ethers.getContractFactory("ArbitrageVault");
-      const { stakedUsde } = await loadFixture(deployVaultFixture);
+      const { stakedUsde, owner } = await loadFixture(deployVaultFixture);
 
       await expect(
-        ArbitrageVaultFactory.deploy(ethers.ZeroAddress, await stakedUsde.getAddress())
+        ArbitrageVaultFactory.deploy(ethers.ZeroAddress, await stakedUsde.getAddress(), owner.address)
       ).to.be.revertedWith("ArbitrageVault: zero address");
     });
 
     it("Should revert if sUSDe token address is zero", async function () {
       const ArbitrageVaultFactory = await ethers.getContractFactory("ArbitrageVault");
-      const { usdeToken } = await loadFixture(deployVaultFixture);
+      const { usdeToken, owner } = await loadFixture(deployVaultFixture);
 
       await expect(
-        ArbitrageVaultFactory.deploy(await usdeToken.getAddress(), ethers.ZeroAddress)
+        ArbitrageVaultFactory.deploy(await usdeToken.getAddress(), ethers.ZeroAddress, owner.address)
       ).to.be.revertedWith("ArbitrageVault: zero sUSDe address");
+    });
+
+    it("Should revert if fee recipient address is zero", async function () {
+      const ArbitrageVaultFactory = await ethers.getContractFactory("ArbitrageVault");
+      const { usdeToken, stakedUsde } = await loadFixture(deployVaultFixture);
+
+      await expect(
+        ArbitrageVaultFactory.deploy(await usdeToken.getAddress(), await stakedUsde.getAddress(), ethers.ZeroAddress)
+      ).to.be.revertedWith("ArbitrageVault: zero fee recipient");
     });
   });
 

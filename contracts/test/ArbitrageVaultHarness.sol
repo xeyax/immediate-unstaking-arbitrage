@@ -23,8 +23,8 @@ contract ArbitrageVaultHarness is ArbitrageVault {
     using SafeERC20 for IERC20;
     // ============ Constructor ============
 
-    constructor(address usdeToken, address stakedUsdeToken)
-        ArbitrageVault(usdeToken, stakedUsdeToken)
+    constructor(address usdeToken, address stakedUsdeToken, address feeRecipient)
+        ArbitrageVault(usdeToken, stakedUsdeToken, feeRecipient)
     {}
 
     // ============ Test Helper Functions ============

@@ -54,6 +54,24 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
     /// @notice Index of last allocated proxy for round-robin allocation
     uint256 private lastAllocatedIndex;
 
+    /// @notice Mapping of whitelisted keeper addresses
+    mapping(address => bool) public isKeeper;
+
+    /// @notice Performance fee in basis points (0-10000, where 10000 = 100%)
+    uint256 public performanceFee;
+
+    /// @notice Address that receives collected fees
+    address public feeRecipient;
+
+    /// @notice Minimum profit threshold in basis points (default 10 = 0.1%)
+    uint256 public minProfitThreshold;
+
+    /// @notice Maximum performance fee allowed (50% = 5000 basis points)
+    uint256 public constant MAX_PERFORMANCE_FEE = 5000;
+
+    /// @notice Basis points denominator (100% = 10000 basis points)
+    uint256 public constant BASIS_POINTS = 10000;
+
     /* ========== EVENTS ========== */
 
     /**
@@ -99,18 +117,53 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
      */
     event ProxyReleased(address indexed proxy);
 
+    /**
+     * @notice Emitted when a keeper is added to the whitelist
+     * @param keeper Address of the keeper added
+     */
+    event KeeperAdded(address indexed keeper);
+
+    /**
+     * @notice Emitted when a keeper is removed from the whitelist
+     * @param keeper Address of the keeper removed
+     */
+    event KeeperRemoved(address indexed keeper);
+
+    /**
+     * @notice Emitted when performance fee is updated
+     * @param oldFee Previous fee in basis points
+     * @param newFee New fee in basis points
+     */
+    event PerformanceFeeUpdated(uint256 oldFee, uint256 newFee);
+
+    /**
+     * @notice Emitted when fee recipient is updated
+     * @param oldRecipient Previous fee recipient address
+     * @param newRecipient New fee recipient address
+     */
+    event FeeRecipientUpdated(address indexed oldRecipient, address indexed newRecipient);
+
+    /**
+     * @notice Emitted when minimum profit threshold is updated
+     * @param oldThreshold Previous threshold in basis points
+     * @param newThreshold New threshold in basis points
+     */
+    event MinProfitThresholdUpdated(uint256 oldThreshold, uint256 newThreshold);
+
     /* ========== CONSTRUCTOR ========== */
 
     /**
      * @notice Initializes the ArbitrageVault contract
      * @param usdeToken Address of the USDe token (underlying asset)
      * @param stakedUsdeToken Address of the Ethena sUSDe token
+     * @param initialFeeRecipient Address to receive performance fees
      * @dev Sets up ERC4626 with USDe as the underlying asset
      *      and initializes ownership to the deployer
      */
     constructor(
         address usdeToken,
-        address stakedUsdeToken
+        address stakedUsdeToken,
+        address initialFeeRecipient
     )
         ERC4626(IERC20(usdeToken))
         ERC20(VAULT_NAME, VAULT_SYMBOL)
@@ -118,8 +171,14 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
     {
         require(usdeToken != address(0), "ArbitrageVault: zero address");
         require(stakedUsdeToken != address(0), "ArbitrageVault: zero sUSDe address");
+        require(initialFeeRecipient != address(0), "ArbitrageVault: zero fee recipient");
 
         stakedUsde = IStakedUSDe(stakedUsdeToken);
+
+        // Initialize parameters with defaults
+        performanceFee = 1000; // 10%
+        feeRecipient = initialFeeRecipient;
+        minProfitThreshold = 10; // 0.1%
     }
 
     /* ========== PUBLIC FUNCTIONS ========== */
@@ -250,6 +309,83 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
         returns (string memory)
     {
         return VAULT_SYMBOL;
+    }
+
+    /* ========== ACCESS CONTROL & PARAMETER MANAGEMENT ========== */
+
+    /**
+     * @notice Modifier to restrict function access to whitelisted keepers only
+     */
+    modifier onlyKeeper() {
+        require(isKeeper[msg.sender], "Caller is not a keeper");
+        _;
+    }
+
+    /**
+     * @notice Adds a keeper to the whitelist
+     * @param keeper Address to add as keeper
+     * @dev Only callable by owner
+     */
+    function addKeeper(address keeper) external onlyOwner {
+        require(keeper != address(0), "Invalid keeper address");
+        require(!isKeeper[keeper], "Already a keeper");
+
+        isKeeper[keeper] = true;
+        emit KeeperAdded(keeper);
+    }
+
+    /**
+     * @notice Removes a keeper from the whitelist
+     * @param keeper Address to remove from keepers
+     * @dev Only callable by owner
+     */
+    function removeKeeper(address keeper) external onlyOwner {
+        require(isKeeper[keeper], "Not a keeper");
+
+        isKeeper[keeper] = false;
+        emit KeeperRemoved(keeper);
+    }
+
+    /**
+     * @notice Updates the performance fee
+     * @param newFee New performance fee in basis points (0-5000)
+     * @dev Only callable by owner. Maximum 50% to protect depositors.
+     */
+    function setPerformanceFee(uint256 newFee) external onlyOwner {
+        require(newFee <= MAX_PERFORMANCE_FEE, "Fee exceeds maximum");
+
+        uint256 oldFee = performanceFee;
+        performanceFee = newFee;
+
+        emit PerformanceFeeUpdated(oldFee, newFee);
+    }
+
+    /**
+     * @notice Updates the fee recipient address
+     * @param newRecipient New address to receive fees
+     * @dev Only callable by owner
+     */
+    function setFeeRecipient(address newRecipient) external onlyOwner {
+        require(newRecipient != address(0), "Invalid recipient address");
+
+        address oldRecipient = feeRecipient;
+        feeRecipient = newRecipient;
+
+        emit FeeRecipientUpdated(oldRecipient, newRecipient);
+    }
+
+    /**
+     * @notice Updates the minimum profit threshold for arbitrage execution
+     * @param newThreshold New threshold in basis points
+     * @dev Only callable by owner
+     */
+    function setMinProfitThreshold(uint256 newThreshold) external onlyOwner {
+        require(newThreshold <= BASIS_POINTS, "Threshold exceeds 100%");
+
+        uint256 oldThreshold = minProfitThreshold;
+        minProfitThreshold = newThreshold;
+
+        emit MinProfitThresholdUpdated(oldThreshold, newThreshold);
     }
 
     /* ========== PROXY MANAGEMENT ========== */

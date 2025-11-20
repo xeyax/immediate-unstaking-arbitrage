@@ -29,7 +29,8 @@ describe("Proxy Orchestration (Phase 2)", function () {
     const ArbitrageVaultHarnessFactory = await ethers.getContractFactory("ArbitrageVaultHarness");
     const vault: ArbitrageVaultHarness = await ArbitrageVaultHarnessFactory.deploy(
       await usdeToken.getAddress(),
-      await stakedUsde.getAddress()
+      await stakedUsde.getAddress(),
+      owner.address // fee recipient
     );
     await vault.waitForDeployment();
 
