@@ -293,28 +293,11 @@ All → Phase 8: Integration Testing
 - Phase 2 and Phase 3 can be developed **simultaneously** (independent)
 - Phase 5, 6, 7 can be developed **simultaneously** after Phase 4 completes
 
----
-
-## Timeline Estimate
-
-| Phase | Estimated Duration | Can Parallel With | Status |
-|-------|-------------------|-------------------|--------|
-| Phase 1: Core Vault | 1-2 days | - | ✅ Completed |
-| Phase 2: Ethena + Proxies | 2-3 days | Phase 3 | ✅ Completed |
-| Phase 3: Access Control | 1 day | Phase 2 | ⏳ Next |
-| Phase 4: Position + NAV | 2 days | - | Pending |
-| Phase 5: Arbitrage | 2-3 days | Phase 6, 7 | Pending |
-| Phase 6: Withdrawal Queue | 2-3 days | Phase 5, 7 | Pending |
-| Phase 7: Fee Collection | 1 day | Phase 5, 6 | Pending |
-| Phase 8: Integration | 1-2 days | - | Pending |
-| **Total Core Development** | **12-17 days** | | **~3 days done** |
-| Testing & Documentation | 3-5 days | | |
-| **Total Project Duration** | **2-3 weeks** | | |
-
-**Optimistic Timeline (with parallelization):**
-- Week 1: Phase 1 ✅, Phase 2 ✅ (Phase 3 next)
-- Week 2: Phase 4, then Phase 5 + 6 + 7 (parallel)
-- Week 3: Phase 8, QA, Documentation
+**Current Status:**
+- ✅ Phase 1: Core Vault - Completed
+- ✅ Phase 2: Ethena Integration & Proxy Orchestration - Completed
+- ⏳ Phase 3: Access Control & Parameter Management - Next
+- Pending: Phases 4-8
 
 ---
 
