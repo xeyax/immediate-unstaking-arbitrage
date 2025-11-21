@@ -73,4 +73,43 @@ contract ArbitrageVaultHarness is ArbitrageVault {
         // Release proxy
         _releaseProxy(proxyAddress);
     }
+
+    // ============ Phase 4: Position Tracking Test Helpers ============
+
+    /**
+     * @notice TEST HELPER: Opens a position with given parameters
+     * @param sUsdeAmount Amount of sUSDe being unstaked
+     * @param bookValue USDe paid to acquire sUSDe (for testing - must be realistic)
+     * @param expectedAssets Expected USDe from Ethena (for testing - will be validated)
+     * @return positionId ID of the newly created position
+     * @dev Exposes internal _openPosition for direct testing
+     *      In production (Phase 5), executeArbitrage() will:
+     *      1. Measure actual USDe spent in DEX swap (bookValue)
+     *      2. Get actual expectedAssets from proxy.initiateUnstake() return value
+     *      3. Call _openPosition() with validated values
+     *      For testing, caller must provide realistic values that pass validation:
+     *      - expectedAssets >= bookValue (profit must be non-negative)
+     *      - bookValue > 0, sUsdeAmount > 0
+     */
+    function openPositionForTesting(
+        uint256 sUsdeAmount,
+        uint256 bookValue,
+        uint256 expectedAssets
+    ) external onlyOwner returns (uint256 positionId) {
+        // Allocate proxy
+        address proxyAddress = _allocateFreeProxy();
+
+        // Transfer sUSDe to proxy
+        IERC20(address(stakedUsde)).safeTransfer(proxyAddress, sUsdeAmount);
+
+        // Initiate unstake through proxy - get actual expected assets from Ethena
+        UnstakeProxy proxy = UnstakeProxy(proxyAddress);
+        uint256 actualExpectedAssets = proxy.initiateUnstake(sUsdeAmount);
+
+        // For testing, we use the provided expectedAssets parameter rather than actualExpectedAssets
+        // to test various scenarios. In production, executeArbitrage will use actualExpectedAssets.
+        // _openPosition will validate that expectedAssets >= bookValue.
+        return _openPosition(sUsdeAmount, bookValue, expectedAssets, proxyAddress);
+    }
+
 }

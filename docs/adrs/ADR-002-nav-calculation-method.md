@@ -53,22 +53,23 @@ Trade-offs: Conservative; positions ready to claim but not yet claimed are under
 - Standard ERC-4626 behavior: if totalSupply == 0, shares = assets
 
 **Ongoing Operations**
-- NAV calculation requires single sUSDe.convertToAssets() call to determine expectedProfit for accrual calculation.
+- NAV calculation iterates active positions in FIFO range [firstActivePositionId, nextPositionId).
 - Share price gradually increases as positions age toward maturity, reflecting time-proportional profit recognition.
 - Depositors pay fair value: book value plus only the portion of profit accrued during elapsed cooldown time.
 - Withdrawers receive fair value: their proportional share of book value plus accrued profits based on position ages.
 - No incentive to time deposits/withdrawals to exploit position maturity timing.
-- Position tracking must store: sUsdeAmount, bookValue, startTime for each position to calculate accrued profit.
-- Gas cost slightly higher than book value method due to per-position accrual calculation, but prevents unfair value transfer.
+- Position tracking stores: sUsdeAmount, bookValue, expectedAssets (from Ethena cooldownShares), startTime for each position.
+- Gas cost bounded by MAX_ACTIVE_POSITIONS (50 positions ≈ 100k gas), acceptable for deposit/withdraw operations.
 
 ### On-Chain Implementation Notes
 
-- Override `totalAssets()` to implement: `USDe.balanceOf(vault) + Σ(bookValue[i] + accruedProfit[i])`
-- Each position stores: `sUsdeAmount`, `bookValue`, `startTime`
-- Calculate `expectedProfit = sUSDe.convertToAssets(totalSUsde) - totalBookValue` once per NAV calculation
-- Distribute expectedProfit proportionally across positions based on time elapsed: `accruedProfit[i] = (expectedProfit × sUsdeAmount[i] / totalSUsde) × (now - startTime[i]) / COOLDOWN_PERIOD`
-- If `convertToAssets()` fails, revert deposit/withdrawal to prevent incorrect pricing
-- Consider caching convertToAssets() result briefly to reduce gas for multiple deposits/withdrawals in same block
+- Override `totalAssets()` to implement: `USDe.balanceOf(vault) + Σ(bookValue[i] + accruedProfit[i])` for all active positions
+- Each position stores: `sUsdeAmount`, `bookValue`, `expectedAssets`, `startTime`, `claimed`, `proxyContract`
+- `expectedAssets` comes from Ethena's `cooldownShares()` return value at position open time (per-position, not aggregate)
+- Calculate per-position: `accruedProfit[i] = (expectedAssets[i] - bookValue[i]) × min(now - startTime[i], COOLDOWN_PERIOD) / COOLDOWN_PERIOD`
+- Time-weighted accrual: profit accrues linearly over COOLDOWN_PERIOD (7 days), then stops
+- FIFO claim order: positions must be claimed oldest-first via `claimPosition()` (no positionId parameter)
+- Active positions maintained in continuous range with no gaps (FIFO invariant)
 
 ### Dependencies
 

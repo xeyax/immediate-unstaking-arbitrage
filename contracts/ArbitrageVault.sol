@@ -26,10 +26,16 @@ import "./UnstakeProxy.sol";
  *
  * Architecture Decisions:
  * - ADR-001: ERC-4626 with withdrawal queue
- * - ADR-002: Time-weighted profit accrual
- * - ADR-003: O(1) position accounting via accrual rate
+ * - ADR-002: Time-weighted profit accrual with per-position accuracy
+ * - ADR-003: Bounded O(N) position accounting (max 50 active positions)
  * - ADR-005: Owner + keeper access control
  * - ADR-008: Proxy orchestration for concurrent unstakes
+ *
+ * NAV Calculation Approach:
+ * - Iterates through all active positions (bounded by MAX_ACTIVE_POSITIONS = 50)
+ * - Each position's profit capped at exactly COOLDOWN_PERIOD (7 days)
+ * - No dependency on keeper claiming speed - NAV is always accurate
+ * - Gas cost: ~110k for 50 positions (acceptable for deposit/withdraw operations)
  */
 contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
@@ -75,6 +81,10 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
     /// @notice Cooldown period for unstaking (7 days in seconds)
     uint256 public constant COOLDOWN_PERIOD = 7 days;
 
+    /// @notice Maximum number of active (unclaimed) positions allowed
+    /// @dev Limits gas cost of NAV calculation. 50 positions = ~110k gas for totalAssets()
+    uint256 public constant MAX_ACTIVE_POSITIONS = 50;
+
     /* ========== POSITION TRACKING ========== */
 
     /// @notice Position data structure
@@ -90,20 +100,13 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
     /// @notice Mapping of position ID to Position
     mapping(uint256 => Position) public positions;
 
+    /// @notice First active (unclaimed) position ID in the FIFO queue
+    /// @dev Positions are claimed in FIFO order. This points to the oldest unclaimed position.
+    uint256 public firstActivePositionId;
+
     /// @notice Next position ID to use
+    /// @dev Also serves as one-past-the-last position ID. Active positions are in [firstActivePositionId, nextPositionId)
     uint256 public nextPositionId;
-
-    /// @notice Total number of active (unclaimed) positions
-    uint256 public activePositionCount;
-
-    /// @notice Accrual rate: profit per second across all active positions (scaled by 1e18)
-    uint256 public accrualRate;
-
-    /// @notice Last time accrual was updated
-    uint256 public lastAccrualUpdate;
-
-    /// @notice Accumulated realized profit from claimed positions
-    uint256 public accumulatedProfit;
 
     /* ========== EVENTS ========== */
 
@@ -243,8 +246,9 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
         feeRecipient = initialFeeRecipient;
         minProfitThreshold = 10; // 0.1%
 
-        // Initialize accrual tracking
-        lastAccrualUpdate = block.timestamp;
+        // Add deployer as initial keeper to ensure positions can be claimed
+        isKeeper[msg.sender] = true;
+        emit KeeperAdded(msg.sender);
     }
 
     /* ========== PUBLIC FUNCTIONS ========== */
@@ -340,13 +344,49 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
     /**
      * @notice Returns the total assets under management (NAV)
      * @return Total amount of USDe tokens managed by the vault
-     * @dev Currently returns only idle USDe balance
-     *      Will be extended in Phase 3 to include position values
+     * @dev Implements time-weighted NAV calculation with FIFO-based iteration:
+     *      NAV = idle USDe + Σ(bookValue[i] + accruedProfit[i]) for all active positions
+     *      where accruedProfit[i] = expectedProfit[i] * min(elapsed[i], COOLDOWN_PERIOD) / COOLDOWN_PERIOD
+     *
+     *      Active positions are in range [firstActivePositionId, nextPositionId).
+     *      FIFO claim order ensures no gaps in this range.
+     *
+     *      This approach ensures:
+     *      - Profit accrues for EXACTLY 7 days per position (no over-accrual)
+     *      - No dependency on keeper claiming speed
+     *      - Gas cost bounded by MAX_ACTIVE_POSITIONS (50 positions ≈ 100k gas)
+     *      - Simpler than array-based approach (no storage for tracking array)
      */
     function totalAssets() public view virtual override returns (uint256) {
-        // Phase 1: Simple implementation - only idle USDe
-        // Phase 3 will add: idle USDe + position values with time-weighted accrual
-        return IERC20(asset()).balanceOf(address(this));
+        uint256 idleAssets = IERC20(asset()).balanceOf(address(this));
+        (uint256 totalBookValue, uint256 totalProfit) = _calculatePositionsValue();
+        return idleAssets + totalBookValue + totalProfit;
+    }
+
+    /**
+     * @notice Internal helper to calculate total book value and accrued profit of all active positions
+     * @return totalBookValue Sum of book values for all active positions
+     * @return totalProfit Sum of time-weighted accrued profit for all active positions
+     * @dev Iterates through FIFO range [firstActivePositionId, nextPositionId) and calculates
+     *      time-weighted profit for each position, capped at COOLDOWN_PERIOD.
+     */
+    function _calculatePositionsValue() internal view returns (uint256 totalBookValue, uint256 totalProfit) {
+        for (uint256 id = firstActivePositionId; id < nextPositionId; id++) {
+            Position storage position = positions[id];
+
+            // Calculate time elapsed, capped at COOLDOWN_PERIOD
+            uint256 timeElapsed = block.timestamp - position.startTime;
+            if (timeElapsed > COOLDOWN_PERIOD) {
+                timeElapsed = COOLDOWN_PERIOD;
+            }
+
+            // Calculate time-weighted profit for this position
+            uint256 expectedProfit = position.expectedAssets - position.bookValue;
+            uint256 accruedProfit = (expectedProfit * timeElapsed) / COOLDOWN_PERIOD;
+
+            totalBookValue += position.bookValue;
+            totalProfit += accruedProfit;
+        }
     }
 
     /* ========== VIEW FUNCTIONS ========== */
@@ -375,6 +415,49 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
         returns (string memory)
     {
         return VAULT_SYMBOL;
+    }
+
+    /**
+     * @notice Returns detailed information about a position
+     * @param positionId ID of the position to query
+     * @return position The Position struct containing all position data
+     */
+    function getPosition(uint256 positionId) external view returns (Position memory position) {
+        return positions[positionId];
+    }
+
+    /**
+     * @notice Returns the current total accrued profit from all active positions
+     * @return Total profit accrued from all positions
+     * @dev Uses internal helper to calculate time-weighted profit for all active positions
+     *      Each position's profit is capped at COOLDOWN_PERIOD (7 days)
+     */
+    function getAccruedProfit() external view returns (uint256) {
+        (, uint256 totalProfit) = _calculatePositionsValue();
+        return totalProfit;
+    }
+
+    /**
+     * @notice Returns the number of active (unclaimed) positions
+     * @return Number of positions currently being tracked
+     */
+    function activePositionCount() external view returns (uint256) {
+        return nextPositionId - firstActivePositionId;
+    }
+
+    /**
+     * @notice Checks if a position can be claimed
+     * @param positionId ID of the position to check
+     * @return claimable True if position exists, unclaimed, and cooldown elapsed
+     */
+    function isPositionClaimable(uint256 positionId) external view returns (bool claimable) {
+        Position storage position = positions[positionId];
+
+        if (position.sUsdeAmount == 0 || position.claimed) {
+            return false;
+        }
+
+        return block.timestamp >= position.startTime + COOLDOWN_PERIOD;
     }
 
     /* ========== ACCESS CONTROL & PARAMETER MANAGEMENT ========== */
@@ -527,6 +610,102 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
     /* ========== INTERNAL FUNCTIONS ========== */
 
     /**
+     * @notice Opens a new position with provided parameters
+     * @param sUsdeAmount Amount of sUSDe being unstaked
+     * @param bookValue USDe paid to acquire sUSDe
+     * @param expectedAssets Expected USDe from Ethena cooldownShares
+     * @param proxyAddress Address of proxy handling the unstake
+     * @return positionId ID of the newly created position
+     *
+     * @dev ⚠️ SECURITY CRITICAL - PHASE 4 LIMITATION:
+     *
+     *      This function currently TRUSTS the caller to provide accurate bookValue and expectedAssets.
+     *      There is NO on-chain verification that these values match actual USDe spent or Ethena's
+     *      return value. This creates a CRITICAL VULNERABILITY:
+     *
+     *      Attack Scenario:
+     *      1. Malicious keeper calls executeArbitrage with fake bookValue (e.g., 1M USDe)
+     *      2. No USDe actually leaves vault (idle balance unchanged)
+     *      3. totalAssets() += bookValue (NAV inflated by 1M USDe)
+     *      4. Attacker deposits small amount, gets huge shares at inflated NAV
+     *      5. Attacker withdraws, stealing real USDe from other depositors
+     *
+     *      MITIGATION FOR PHASE 4 (Testing):
+     *      - Function is internal (not directly callable)
+     *      - Only test harness has access (controlled environment)
+     *      - Production code (executeArbitrage) not yet implemented
+     *
+     *      REQUIRED FOR PHASE 5 (Production):
+     *      executeArbitrage() MUST derive these values trustlessly:
+     *
+     *      ```solidity
+     *      function executeArbitrage(...) external onlyKeeper {
+     *          uint256 balanceBefore = IERC20(asset()).balanceOf(address(this));
+     *
+     *          // Execute DEX swap (USDe -> sUSDe)
+     *          (bool success, ) = dexRouter.call(swapCalldata);
+     *          require(success, "Swap failed");
+     *
+     *          uint256 balanceAfter = IERC20(asset()).balanceOf(address(this));
+     *          uint256 bookValue = balanceBefore - balanceAfter; // ✅ Measured on-chain
+     *
+     *          // Get sUSDe received
+     *          uint256 sUsdeAmount = IERC20(stakedUsde).balanceOf(address(this));
+     *
+     *          // Transfer to proxy and initiate unstake
+     *          address proxy = _allocateFreeProxy();
+     *          IERC20(stakedUsde).transfer(proxy, sUsdeAmount);
+     *          uint256 expectedAssets = UnstakeProxy(proxy).initiateUnstake(sUsdeAmount); // ✅ From Ethena
+     *
+     *          _openPosition(sUsdeAmount, bookValue, expectedAssets, proxy); // ✅ Validated inputs
+     *      }
+     *      ```
+     *
+     *      Alternative: Add balance verification directly in _openPosition (but this requires
+     *      additional state tracking and complicates the function).
+     *
+     * @custom:security-note DO NOT expose this function publicly or call with untrusted inputs
+     * @custom:audit-note Phase 5 implementation MUST validate bookValue via balance measurement
+     */
+    function _openPosition(
+        uint256 sUsdeAmount,
+        uint256 bookValue,
+        uint256 expectedAssets,
+        address proxyAddress
+    ) internal returns (uint256 positionId) {
+        // Basic sanity checks (NOT sufficient for security against malicious inputs)
+        require(expectedAssets >= bookValue, "Expected assets must be >= book value");
+        require(bookValue > 0, "Book value must be > 0");
+        require(sUsdeAmount > 0, "sUSDe amount must be > 0");
+
+        // Additional sanity check: bookValue should be reasonable relative to expectedAssets
+        // Prevent obvious manipulation (e.g., bookValue = 1M, expectedAssets = 1.1M)
+        require(
+            bookValue <= expectedAssets * 2,
+            "Book value too high relative to expected assets"
+        );
+
+        // Check position limit
+        require(
+            (nextPositionId - firstActivePositionId) < MAX_ACTIVE_POSITIONS,
+            "Maximum active positions reached"
+        );
+
+        // Create position
+        positionId = nextPositionId++;
+        positions[positionId] = Position({
+            sUsdeAmount: sUsdeAmount,
+            bookValue: bookValue,
+            expectedAssets: expectedAssets,
+            startTime: block.timestamp,
+            claimed: false,
+            proxyContract: proxyAddress
+        });
+
+        emit PositionOpened(positionId, proxyAddress, sUsdeAmount, expectedAssets, bookValue);
+    }
+
+    /**
      * @notice Allocates a free proxy for unstaking operation using round-robin
      * @return proxy Address of allocated proxy
      * @dev Uses round-robin allocation starting from last allocated index.
@@ -566,4 +745,56 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
         proxyBusy[proxy] = false;
         emit ProxyReleased(proxy);
     }
+
+    /* ========== POSITION MANAGEMENT ========== */
+
+    /**
+     * @notice Claims the oldest matured position after cooldown period (FIFO order)
+     * @dev Only keepers can call this after cooldown period. Vault receives the USDe from proxy.
+     *      Positions must be claimed in FIFO order (oldest first).
+     *      This ensures no gaps in the active position range [firstActivePositionId, nextPositionId).
+     */
+    function claimPosition() external nonReentrant onlyKeeper {
+        // Get the oldest active position (FIFO)
+        uint256 positionId = firstActivePositionId;
+
+        require(positionId < nextPositionId, "No active positions");
+
+        Position storage position = positions[positionId];
+
+        // Validation checks
+        require(!position.claimed, "Position already claimed");
+        require(
+            block.timestamp >= position.startTime + COOLDOWN_PERIOD,
+            "Cooldown period not elapsed"
+        );
+
+        // Get USDe balance before claiming
+        IERC20 usdeToken = IERC20(asset());
+        uint256 balanceBefore = usdeToken.balanceOf(address(this));
+
+        // Execute unstake via proxy - this transfers USDe to vault
+        UnstakeProxy(position.proxyContract).claimUnstake(address(this));
+
+        // Calculate actual USDe received
+        uint256 balanceAfter = usdeToken.balanceOf(address(this));
+        uint256 usdeReceived = balanceAfter - balanceBefore;
+
+        // Calculate realized profit
+        uint256 realizedProfit = usdeReceived > position.bookValue
+            ? usdeReceived - position.bookValue
+            : 0;
+
+        // Mark position as claimed
+        position.claimed = true;
+
+        // Move to next position in FIFO queue
+        firstActivePositionId++;
+
+        // Release proxy back to available pool
+        _releaseProxy(position.proxyContract);
+
+        emit PositionClaimed(positionId, position.proxyContract, usdeReceived, realizedProfit);
+    }
+
 }

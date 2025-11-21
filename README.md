@@ -76,7 +76,7 @@ The vault implements several key design decisions:
 
 - **ERC-4626 with Withdrawal Queue** (ADR-001): Standard vault interface extended with withdrawal queue to prevent indefinite lockup during continuous redeployment
 - **Time-Weighted NAV** (ADR-002): Fair share pricing using time-proportional profit accrual
-- **Accrual Rate Accounting** (ADR-003): O(1) NAV calculation via aggregate accrual rate instead of iterating positions
+- **FIFO Position Tracking** (ADR-003): Bounded O(N) NAV calculation via FIFO range iteration (max 50 positions, ~100k gas)
 - **Off-Chain Price Discovery** (ADR-004): Keepers provide swap parameters, vault validates minimum profit threshold
 - **Owner-Controlled Parameters** (ADR-005): Single owner controls all 5 parameters (performance fee, fee recipient, min profit threshold, keeper whitelist, owner)
 - **No Deployment Limits** (ADR-006): Withdraw via queue instead of limiting capital deployment
