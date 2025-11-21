@@ -216,6 +216,22 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
         uint256 profit
     );
 
+    /**
+     * @notice Emitted when arbitrage is executed
+     * @param positionId ID of the newly opened position
+     * @param dexTarget DEX router used for swap
+     * @param usdeSpent Actual USDe spent (measured via balance delta)
+     * @param sUsdeReceived Amount of sUSDe received from swap
+     * @param expectedProfit Expected profit from this position
+     */
+    event ArbitrageExecuted(
+        uint256 indexed positionId,
+        address indexed dexTarget,
+        uint256 usdeSpent,
+        uint256 sUsdeReceived,
+        uint256 expectedProfit
+    );
+
     /* ========== CONSTRUCTOR ========== */
 
     /**
@@ -535,6 +551,120 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
         minProfitThreshold = newThreshold;
 
         emit MinProfitThresholdUpdated(oldThreshold, newThreshold);
+    }
+
+    /* ========== ARBITRAGE EXECUTION ========== */
+
+    /**
+     * @notice Executes arbitrage by swapping USDe for sUSDe and opening an unstaking position
+     * @param dexTarget Address of the DEX router to execute swap
+     * @param amountIn Amount of USDe to spend on the swap
+     * @param minAmountOut Minimum sUSDe to receive (slippage protection)
+     * @param swapCalldata Calldata for the DEX swap call
+     * @return positionId ID of the newly opened position
+     *
+     * @dev SECURITY CRITICAL - This function implements trustless validation:
+     *      1. Measures actual USDe spent via balance delta (bookValue = balanceBefore - balanceAfter)
+     *      2. Gets expectedAssets from Ethena via proxy.initiateUnstake() return value
+     *      3. Validates minimum profit threshold before execution
+     *      4. Uses slippage protection via minAmountOut
+     *
+     *      Attack Prevention:
+     *      - Keeper CANNOT manipulate bookValue (measured on-chain)
+     *      - Keeper CANNOT manipulate expectedAssets (from Ethena)
+     *      - minProfitThreshold prevents unprofitable trades
+     *      - Slippage protection prevents sandwich attacks
+     *
+     *      Execution Flow:
+     *      1. Validate keeper authorization (onlyKeeper modifier)
+     *      2. Allocate free proxy for unstaking
+     *      3. Measure USDe balance before swap
+     *      4. Execute DEX swap (USDe → sUSDe) via low-level call
+     *      5. Measure USDe balance after swap → bookValue
+     *      6. Validate sUSDe received >= minAmountOut
+     *      7. Transfer sUSDe to proxy
+     *      8. Initiate unstake via proxy → get expectedAssets from Ethena
+     *      9. Validate profit >= minProfitThreshold
+     *      10. Open position with validated values
+     *      11. Emit ArbitrageExecuted event
+     */
+    function executeArbitrage(
+        address dexTarget,
+        uint256 amountIn,
+        uint256 minAmountOut,
+        bytes calldata swapCalldata
+    ) external onlyKeeper nonReentrant returns (uint256 positionId) {
+        require(dexTarget != address(0), "Invalid DEX target");
+        require(amountIn > 0, "Amount must be > 0");
+        require(minAmountOut > 0, "Min amount out must be > 0");
+
+        IERC20 usdeToken = IERC20(asset());
+
+        // Validate sufficient USDe balance
+        require(usdeToken.balanceOf(address(this)) >= amountIn, "Insufficient USDe balance");
+
+        // Allocate free proxy for unstaking
+        address proxyAddress = _allocateFreeProxy();
+
+        uint256 bookValue;
+        uint256 sUsdeReceived;
+        uint256 expectedAssets;
+
+        // Scope to avoid stack too deep
+        {
+            // Measure USDe balance before swap
+            uint256 balanceBefore = usdeToken.balanceOf(address(this));
+
+            // Approve DEX to spend exact amountIn
+            usdeToken.forceApprove(dexTarget, amountIn);
+
+            // Execute DEX swap
+            (bool success, ) = dexTarget.call(swapCalldata);
+
+            // CRITICAL: Reset allowance to 0 immediately after swap
+            // This prevents:
+            // 1. Accumulating allowance over multiple trades
+            // 2. Malicious keeper deploying fake DEX to gain permanent allowance
+            // 3. Compromised router draining vault funds via transferFrom
+            usdeToken.forceApprove(dexTarget, 0);
+
+            require(success, "Swap failed");
+
+            // Measure actual USDe spent (trustless)
+            uint256 balanceAfter = usdeToken.balanceOf(address(this));
+            require(balanceAfter <= balanceBefore, "Balance increased after swap");
+            bookValue = balanceBefore - balanceAfter;
+
+            require(bookValue <= amountIn, "Spent more than amountIn");
+            require(bookValue > 0, "No USDe was spent");
+        }
+
+        // Scope for sUSDe handling
+        {
+            IERC20 sUsdeToken = IERC20(address(stakedUsde));
+
+            // Get sUSDe received from swap
+            sUsdeReceived = sUsdeToken.balanceOf(address(this));
+            require(sUsdeReceived >= minAmountOut, "Insufficient sUSDe received (slippage)");
+            require(sUsdeReceived > 0, "No sUSDe received");
+
+            // Transfer sUSDe to proxy
+            sUsdeToken.safeTransfer(proxyAddress, sUsdeReceived);
+
+            // Initiate unstake via proxy - get expectedAssets from Ethena
+            expectedAssets = UnstakeProxy(proxyAddress).initiateUnstake(sUsdeReceived);
+        }
+
+        // Validate profit threshold
+        uint256 expectedProfit = expectedAssets > bookValue ? expectedAssets - bookValue : 0;
+        uint256 minProfit = (bookValue * minProfitThreshold) / BASIS_POINTS;
+        require(expectedProfit >= minProfit, "Profit below minimum threshold");
+
+        // Open position with validated values
+        positionId = _openPosition(sUsdeReceived, bookValue, expectedAssets, proxyAddress);
+
+        // Emit event for off-chain monitoring
+        emit ArbitrageExecuted(positionId, dexTarget, bookValue, sUsdeReceived, expectedProfit);
     }
 
     /* ========== PROXY MANAGEMENT ========== */

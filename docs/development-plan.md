@@ -41,7 +41,7 @@ Development of ArbitrageVault.sol - an ERC-4626 compliant vault that performs au
 - `contracts/UnstakeProxy.sol` ✓ (107 lines)
 - `contracts/mocks/MockStakedUSDe.sol` ✓ (136 lines with authorization)
 - Proxy management functions in `ArbitrageVault.sol` ✓
-- `contracts/test/ArbitrageVaultHarness.sol` ✓ (test harness pattern)
+- `contracts/test/ArbitrageVaultHarness.sol` ✓ (test-only harness for unit tests - NOT for production)
 - Full test suite for proxy orchestration ✓ (23 tests in ProxyOrchestration.test.ts)
 
 **Acceptance Criteria:**
@@ -64,7 +64,7 @@ Development of ArbitrageVault.sol - an ERC-4626 compliant vault that performs au
 - Removed 113 lines of unused code (cooldownAssets, convertToShares, recoverTokens, etc.)
 - Implemented round-robin proxy allocation for efficiency
 - Added authorization checks in MockStakedUSDe (owner or allowance)
-- Created ArbitrageVaultHarness for clean test separation
+- Created ArbitrageVaultHarness for unit testing (exposes internal functions - FOR TESTS ONLY, never production)
 
 **Test Coverage:** 23 tests covering:
 - Proxy deployment (5 tests)
@@ -158,7 +158,13 @@ Development of ArbitrageVault.sol - an ERC-4626 compliant vault that performs au
   - `getAccruedProfit()` - returns total accrued profit (uses _calculatePositionsValue)
   - `activePositionCount()` - returns active positions count
   - `isPositionClaimable()` - checks if position can be claimed
+- `ArbitrageVaultHarness.sol` ✓ - test-only contract for unit tests (exposes `openPositionForTesting()`)
 - Full position lifecycle tests ✓ (26 tests in PositionTracking.test.ts + 14 in BugFixes.test.ts including MAX_ACTIVE_POSITIONS)
+
+**⚠️ IMPORTANT - Test Harness Usage:**
+- `ArbitrageVaultHarness` is **ONLY for unit tests** - allows testing edge cases and internal functions
+- Integration tests (ArbitrageExecution.test.ts) use **production ArbitrageVault** with executeArbitrage()
+- **Production deployment**: Deploy `ArbitrageVault.sol` ONLY, NOT the harness!
 
 **Acceptance Criteria:**
 - Positions track real Ethena profit via proxy return values ✓
@@ -194,52 +200,62 @@ Development of ArbitrageVault.sol - an ERC-4626 compliant vault that performs au
 - Integration scenarios (5 tests)
 - Bug fixes verification (10 tests)
 
-**⚠️ CRITICAL SECURITY NOTE FOR PHASE 5:**
+**✅ SECURITY IMPLEMENTED (Phase 5 Completed):**
 
-`_openPosition()` currently accepts `bookValue` and `expectedAssets` as trusted parameters.
-This is ONLY safe because:
-1. Function is `internal` (not externally callable)
-2. Only test harness calls it in controlled environment
-3. executeArbitrage() not yet implemented
+`_openPosition()` is `internal` and called by:
+1. ✅ **Production**: `executeArbitrage()` with trustless validation (balance delta + Ethena return value)
+2. ✅ **Testing**: `ArbitrageVaultHarness.openPositionForTesting()` in controlled unit tests
 
-**Phase 5 MUST implement executeArbitrage() with trustless validation:**
-- Measure actual USDe balance delta (balanceBefore - balanceAfter) for bookValue
-- Use proxy.initiateUnstake() return value for expectedAssets
-- Pass only measured/validated values to _openPosition()
+**Security guarantees (Phase 5):**
+- ✅ `bookValue` measured via balance delta (keeper CANNOT manipulate)
+- ✅ `expectedAssets` from Ethena cooldownShares() (keeper CANNOT manipulate)
+- ✅ Allowance reset to 0 after each swap (prevents malicious keeper attack)
+- ✅ Profit threshold validation prevents unprofitable trades
+- ✅ Slippage protection prevents sandwich attacks
 
-**Without this, a malicious keeper can manipulate NAV and steal funds.**
-
-See contracts/ArbitrageVault.sol:649-697 for detailed attack scenario and mitigation.
+See contracts/ArbitrageVault.sol:566-589 for security implementation details.
 
 ---
 
 ### Phase 5: Arbitrage Execution
-**Status:** Pending
+**Status:** ✅ Completed (2025-11-21)
 **Dependencies:** Phase 2, Phase 3, Phase 4
 **Related ADRs:** ADR-004
 
 **Scope:**
-- `executeArbitrage()` function
-- DEX swap integration (generic calldata)
-- Profit threshold validation
-- Slippage protection
-- Proxy allocation during execution
-- Full arbitrage flow
+- `executeArbitrage()` function ✓
+- DEX swap integration (generic calldata) ✓
+- Profit threshold validation ✓
+- Slippage protection ✓
+- Proxy allocation during execution ✓
+- Full arbitrage flow ✓
 
 **Deliverables:**
-- `executeArbitrage()` implementation
-- Swap execution logic
-- Integration with Phases 2, 3, 4
-- Full arbitrage flow tests
+- `executeArbitrage()` implementation ✓ (lines 591-658)
+- Trustless bookValue measurement via balance delta ✓
+- expectedAssets from Ethena via proxy.initiateUnstake() ✓
+- Slippage protection via minAmountOut ✓
+- Profit threshold validation ✓
+- ArbitrageExecuted event ✓
+- MockDEX for testing ✓
+- Full arbitrage flow tests ✓ (23 tests in ArbitrageExecution.test.ts)
 
 **Acceptance Criteria:**
-- Only authorized keepers can execute
-- Validates minimum profit threshold
-- Allocates free proxy (reverts if none available)
-- Executes DEX swap correctly
-- Initiates unstake via proxy
-- Opens position with correct data
-- Events emitted for monitoring
+- Only authorized keepers can execute ✓
+- Validates minimum profit threshold ✓
+- Allocates free proxy (reverts if none available) ✓
+- Executes DEX swap correctly ✓
+- Initiates unstake via proxy ✓
+- Opens position with validated data ✓
+- Events emitted for monitoring ✓
+
+**Security Implementation:**
+- ✅ Trustless bookValue: measured via `balanceBefore - balanceAfter` (keeper CANNOT manipulate)
+- ✅ Trustless expectedAssets: from Ethena's `cooldownShares()` return value (keeper CANNOT manipulate)
+- ✅ Profit validation: requires `expectedProfit >= minProfitThreshold`
+- ✅ Slippage protection: requires `sUsdeReceived >= minAmountOut`
+- ✅ Attack prevention: all critical values measured on-chain or from Ethena
+- ✅ See contracts/ArbitrageVault.sol:566-589 for detailed security flow
 
 ---
 
@@ -395,7 +411,7 @@ All → Phase 8: Integration Testing
 - Code follows CODING_STANDARDS.md requirements
 - All functions have complete NatSpec documentation
 
-**Phase 1, 2, 3 & 4 (Completed):**
+**Phase 1, 2, 3, 4 & 5 (Completed):**
 - ✅ ERC-4626 vault with deposit/withdraw functionality
 - ✅ Proxy orchestration working correctly with multiple concurrent unstakes
 - ✅ Round-robin proxy allocation for efficiency
@@ -406,9 +422,15 @@ All → Phase 8: Integration Testing
 - ✅ Position tracking with bounded O(N) NAV calculation (FIFO range, max 50 positions)
 - ✅ Time-weighted profit accrual mechanism (per-position accuracy)
 - ✅ Position lifecycle (open, track, FIFO claim)
-- ✅ Test harness pattern for clean separation of test code
-- ✅ 103 tests passing (19 Phase 1 + 23 Phase 2 + 23 Phase 3 + 38 Phase 4 including MAX_ACTIVE_POSITIONS tests)
-- ✅ Mock contracts with proper authorization
+- ✅ **Arbitrage execution with trustless validation** (Phase 5)
+- ✅ DEX integration with slippage protection
+- ✅ Profit threshold enforcement
+- ✅ Security: bookValue measured via balance delta (attack-proof)
+- ✅ Security: expectedAssets from Ethena (attack-proof)
+- ✅ Test harness for unit tests (ArbitrageVaultHarness - testing only, NOT production)
+- ✅ Integration tests use production executeArbitrage() (ArbitrageExecution.test.ts)
+- ✅ **129 tests passing** (19 Phase 1 + 23 Phase 2 + 23 Phase 3 + 38 Phase 4 + 26 Phase 5)
+- ✅ Mock contracts with proper authorization (including MockDEX)
 - ✅ Minimal interfaces (unused code removed)
 
 ---

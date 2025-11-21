@@ -1,7 +1,7 @@
 ## ADR-004 — Price Discovery Mechanism
 
-**Status**: Proposed
-**Date**: 2025-11-06
+**Status**: Implemented
+**Date**: 2025-11-06 (Implemented: 2025-11-21)
 **Deciders**: Smart Contract Engineering Team
 **Related FRs**: FR-02
 

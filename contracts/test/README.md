@@ -10,30 +10,55 @@ Test harnesses expose internal functions and provide test helpers without pollut
 
 ### ArbitrageVaultHarness.sol
 
-**Purpose:** Testing proxy orchestration during Phase 2-4.
+**Purpose:** Unit testing and edge case testing (ALL PHASES).
 
 **Test Helpers:**
-- `initiateUnstakeForTesting()` - Simulates arbitrage execution for Phase 2
-- `claimUnstakeForTesting()` - Simulates position claiming for Phase 2
+- `openPositionForTesting()` - Opens position with specific parameters for edge case testing
+- Exposes internal functions for isolated component testing
 
-**Lifecycle:**
-- **Phase 2-4:** Use harness for testing proxy and position logic
-- **Phase 5+:** Switch to testing through `executeArbitrage()` and `claimPosition()`
-- **Production:** Deploy only `ArbitrageVault.sol`, **NOT** this harness
+**Usage Pattern (Phase 5+):**
+- **Unit tests**: Use harness for isolated component testing
+  - `ProxyOrchestration.test.ts` - tests proxy allocation logic
+  - `PositionTracking.test.ts` - tests position lifecycle and NAV edge cases
+  - `BugFixes.test.ts` - tests specific edge cases (zero profit, accrual cap, etc.)
+- **Integration tests**: Use production `executeArbitrage()`
+  - `ArbitrageExecution.test.ts` - tests full arbitrage flow with real DEX interaction
+
+**Why keep harness after Phase 5:**
+- ✅ Unit tests need isolated component testing
+- ✅ Edge cases (zero profit, specific timing) hard to reproduce via executeArbitrage()
+- ✅ Separation: unit tests (harness) vs integration tests (production)
+
+**Production Deployment:**
+- ✅ Deploy: `ArbitrageVault.sol` ONLY
+- ❌ DO NOT deploy: `ArbitrageVaultHarness.sol` (test-only contract)
 
 ## Usage in Tests
 
+**Unit Tests (use harness):**
 ```typescript
-// Import harness instead of main contract
+// Import harness for unit tests
 import { ArbitrageVaultHarness } from "../typechain-types";
 
 // Deploy harness in test fixture
-const ArbitrageVaultHarnessFactory = await ethers.getContractFactory("ArbitrageVaultHarness");
-const vault = await ArbitrageVaultHarnessFactory.deploy(usde, sUsde);
+const factory = await ethers.getContractFactory("ArbitrageVaultHarness");
+const vault = await factory.deploy(usde, sUsde, feeRecipient);
 
-// Use test helpers
-await vault.initiateUnstakeForTesting(amount);
-await vault.claimUnstakeForTesting(proxyAddress);
+// Test edge cases with specific parameters
+await vault.openPositionForTesting(sUsdeAmount, bookValue, expectedAssets);
+```
+
+**Integration Tests (use production):**
+```typescript
+// Import production contract for integration tests
+import { ArbitrageVault } from "../typechain-types";
+
+// Deploy production contract
+const factory = await ethers.getContractFactory("ArbitrageVault");
+const vault = await factory.deploy(usde, sUsde, feeRecipient);
+
+// Test real arbitrage flow
+await vault.executeArbitrage(dexTarget, amountIn, minOut, swapCalldata);
 ```
 
 ## Production Deployment

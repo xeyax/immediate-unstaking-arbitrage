@@ -7,17 +7,30 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 /**
  * @title ArbitrageVaultHarness
  * @notice Test harness for ArbitrageVault that exposes internal functions and adds test helpers
- * @dev This contract should ONLY be used in tests, never deploy to production
+ * @dev ⚠️ FOR TESTING ONLY - NEVER deploy to production
  *
  * Purpose:
- * - Expose internal functions (_allocateFreeProxy, _releaseProxy) for unit testing
- * - Provide test helpers for Phase 2 (before executeArbitrage is implemented)
+ * - **Unit testing**: Expose internal functions for isolated component testing
+ * - **Edge case testing**: Create specific scenarios not easily reproducible via executeArbitrage()
+ * - **Proxy testing**: Direct proxy orchestration tests (Phase 2)
  * - Keep production ArbitrageVault.sol clean of test-only code
  *
- * Lifecycle:
- * - Phase 2-4: Use this harness for testing proxy orchestration
- * - Phase 5+: Switch to testing through executeArbitrage()
- * - Production: Deploy only ArbitrageVault.sol, not this harness
+ * Usage Pattern (Phase 5+):
+ * - **Unit tests**: Use harness to test components in isolation (ProxyOrchestration, PositionTracking, BugFixes)
+ * - **Integration tests**: Use production executeArbitrage() (ArbitrageExecution.test.ts)
+ * - **Edge cases**: Use harness for scenarios like zero-profit positions, specific timing
+ *
+ * Deployment:
+ * - ✅ Testing: ArbitrageVaultHarness (this contract)
+ * - ✅ Production: ArbitrageVault.sol ONLY (no harness!)
+ *
+ * Test files using harness:
+ * - ProxyOrchestration.test.ts (proxy allocation, round-robin)
+ * - PositionTracking.test.ts (position lifecycle, NAV calculation edge cases)
+ * - BugFixes.test.ts (accrual cap, phantom profit, input validation)
+ *
+ * Test files using production code:
+ * - ArbitrageExecution.test.ts (uses executeArbitrage() - full integration flow)
  */
 contract ArbitrageVaultHarness is ArbitrageVault {
     using SafeERC20 for IERC20;
