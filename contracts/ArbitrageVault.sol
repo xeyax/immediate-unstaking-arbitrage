@@ -387,6 +387,9 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
      *      time-weighted profit for each position, capped at COOLDOWN_PERIOD.
      */
     function _calculatePositionsValue() internal view returns (uint256 totalBookValue, uint256 totalProfit) {
+        totalBookValue = 0;
+        totalProfit = 0;
+
         for (uint256 id = firstActivePositionId; id < nextPositionId; id++) {
             Position storage position = positions[id];
 

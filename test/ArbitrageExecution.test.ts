@@ -574,7 +574,6 @@ describe("ArbitrageVault - Phase 5: Arbitrage Execution", function () {
 
       const dexAddress = await dex.getAddress();
       const vaultAddress = await vault.getAddress();
-      const vaultBalance = await usde.balanceOf(vaultAddress);
 
       await vault.connect(keeper).executeArbitrage(
         dexAddress,
