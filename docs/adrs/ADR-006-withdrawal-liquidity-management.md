@@ -1,7 +1,7 @@
 ## ADR-006 — Withdrawal Liquidity Management
 
-**Status**: Proposed
-**Date**: 2025-11-06
+**Status**: Implemented
+**Date**: 2025-11-06 (Implemented: 2025-11-21)
 **Deciders**: Smart Contract Engineering Team
 **Related FRs**: FR-01, FR-04
 
@@ -38,27 +38,45 @@ Only authorized keepers can finalize positions, no automatic finalization on wit
 - Keeper can deploy 100% of vault capital if profitable opportunities exist.
 - Capital efficiency maximized; all idle capital can capture arbitrage spreads.
 
-**Withdrawal Behavior**
-- Withdrawal requests check idle capital first.
-- If insufficient idle capital, vault attempts to finalize matured positions (cooldown >= 7 days).
-- If no matured positions available, withdrawal queued until next position matures.
-- Maximum wait time: 7 days (one full cooldown period).
-- Users informed of expected wait time when requesting withdrawal.
+**Withdrawal Behavior (Fully Async Model - Updated 2025-11-24)**
+- **`requestWithdrawal(shares)`** - PRIMARY and ONLY withdrawal method (async via queue)
+- `redeem(shares)` - **DISABLED** (reverts with "use requestWithdrawal()")
+- `maxRedeem(user)` - Always returns 0 (honest signal: no immediate withdrawals)
+- **All withdrawals are asynchronous** - simplifies code, maximizes FIFO fairness
+- Queue fulfilled in FIFO order when:
+  - **Idle liquidity available** - instant fulfillment within same transaction (**NEW**)
+  - **Anyone** claims matured positions via `claimPosition()` (**PERMISSIONLESS** - no keeper required!)
+  - New deposits arrive (auto-fulfills queue with fresh liquidity)
+- **Fairness invariant:** `idle_liquidity == 0 OR pending_queue.length == 0` (never both > 0)
+  - This ensures queued users always have priority over idle capital
+  - Depositors receive shares at current NAV before their capital fulfills queue (no dilution)
+- **Guaranteed maximum wait time:** 7 days (one full cooldown period)
+  - After 7 days, anyone (including queued user) can call `claimPosition()` to fulfill
+  - No centralization: users not dependent on keeper availability
+- **Typical wait time:** Instant (if idle liquidity) or 1-2 blocks (if keeper or other users active)
+- Escrow mechanism: shares held in contract, assets calculated at fulfillment time (dynamic NAV fairness)
 
 **Gas Considerations**
 - Position finalization costs paid on withdrawal requests when triggered.
 - Keeper can still batch-finalize positions for gas efficiency.
 - Trade-off: user pays gas for immediate liquidity vs. waiting for keeper batch.
 
-### On-Chain Implementation Notes
+### On-Chain Implementation Notes (Updated for FIFO - 2025-11-21)
 
-**Withdrawal Flow Enhancement**
-- withdraw() / redeem() functions check USDe.balanceOf(vault) for idle capital.
-- If idle capital insufficient, call _finalizeMaturedPositions() internal function.
-- _finalizeMaturedPositions() iterates positions where block.timestamp >= startTime + COOLDOWN_PERIOD.
-- For each matured position: retrieve proxy address and call proxy.claimUnstake() (see ADR-008).
-- Finalize positions until sufficient liquidity available or no more matured positions.
-- If still insufficient, add to withdrawal queue (see ADR-001 for queue details).
+**Withdrawal Flow (Fully Async with Auto-Fulfill - Updated 2025-11-24)**
+- `redeem(shares)` **ALWAYS REVERTS** (disabled - async-only model)
+- `requestWithdrawal(shares)` - **ONLY** withdrawal method (creates queue entry, auto-fulfilled if idle liquidity)
+- `maxRedeem(user)` always returns 0 (no synchronous redeem(), must use requestWithdrawal())
+- `maxWithdraw(user)` always returns 0 (no synchronous withdraw(), must use requestWithdrawal())
+- **All withdrawals go through queue** - but instantly fulfilled in same transaction if idle liquidity available
+- **Fairness invariant**: `idle_liquidity == 0 OR pending_queue.length == 0` (queue has priority)
+- **Permissionless fulfillment** - anyone can call claimPosition() to advance queue
+- Users in queue can trigger their own fulfillment (no keeper dependency)
+
+**Key Difference from Original ADR:**
+- Original: iterate all positions, claim any ready position
+- FIFO Implementation: claim only firstActivePositionId if ready
+- Simpler, respects ADR-003 FIFO claim order, but may queue more often
 
 **Queue Integration with Position Finalization**
 - When keeper finalizes matured position, released USDe distributed in order:
@@ -72,10 +90,12 @@ Only authorized keepers can finalize positions, no automatic finalization on wit
 - Track position.startTime to determine maturation (startTime + 7 days <= block.timestamp).
 - No limit enforcement on position count or total deployed capital.
 
-**Estimated Wait Time**
-- Calculate earliest position maturation time for queued withdrawals.
-- Emit event with estimated fulfillment time when withdrawal queued.
-- Users can query their position in queue and expected wait time.
+**Wait Time Transparency**
+- Maximum wait time: 7 days (one cooldown period) - guaranteed by ADR
+- Typical wait time: Instant (if idle liquidity available)
+- Users can query their withdrawal request via `getWithdrawalRequest(requestId)` to see fulfillment status
+- Off-chain: UIs can calculate ETA by checking `firstActivePositionId` and its maturation time
+- No on-chain ETA calculation needed - instant fulfillment in typical case makes it less relevant
 
 ### Dependencies
 

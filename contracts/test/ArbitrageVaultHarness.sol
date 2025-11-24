@@ -96,10 +96,10 @@ contract ArbitrageVaultHarness is ArbitrageVault {
      * @param expectedAssets Expected USDe from Ethena (for testing - will be validated)
      * @return positionId ID of the newly created position
      * @dev Exposes internal _openPosition for direct testing
-     *      In production (Phase 5), executeArbitrage() will:
-     *      1. Measure actual USDe spent in DEX swap (bookValue)
-     *      2. Get actual expectedAssets from proxy.initiateUnstake() return value
-     *      3. Call _openPosition() with validated values
+     *      In production (Phase 5 completed), executeArbitrage() does:
+     *      1. Measures actual USDe spent in DEX swap (bookValue via balance delta)
+     *      2. Gets actual expectedAssets from proxy.initiateUnstake() return value
+     *      3. Calls _openPosition() with trustlessly validated values
      *      For testing, caller must provide realistic values that pass validation:
      *      - expectedAssets >= bookValue (profit must be non-negative)
      *      - bookValue > 0, sUsdeAmount > 0
@@ -117,7 +117,7 @@ contract ArbitrageVaultHarness is ArbitrageVault {
 
         // Initiate unstake through proxy - get actual expected assets from Ethena
         UnstakeProxy proxy = UnstakeProxy(proxyAddress);
-        uint256 actualExpectedAssets = proxy.initiateUnstake(sUsdeAmount);
+        proxy.initiateUnstake(sUsdeAmount);
 
         // For testing, we use the provided expectedAssets parameter rather than actualExpectedAssets
         // to test various scenarios. In production, executeArbitrage will use actualExpectedAssets.

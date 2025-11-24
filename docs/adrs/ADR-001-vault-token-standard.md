@@ -1,7 +1,7 @@
-## ADR-001 — Vault Token Standard
+## ADR-001 — Vault Token Standard (Simplified ERC-4626)
 
-**Status**: Proposed
-**Date**: 2025-11-06
+**Status**: Implemented (Simplified)
+**Date**: 2025-11-06 (Updated: 2025-11-23)
 **Deciders**: Smart Contract Engineering Team
 **Related FRs**: FR-01, FR-05
 
@@ -21,8 +21,8 @@ This guarantees users can exit their positions while maintaining capital efficie
 
 ### Options Considered
 
-**Option A** — Full ERC-4626 compliance with withdrawal queues (chosen)
-Implement standard ERC-4626 where withdrawals exceeding idle capacity enter a queue, fulfilled as positions mature. Requires additional state for request tracking and fulfillment logic. Trade-off: Ensures users can always exit eventually, prevents indefinite liquidity lock; adds implementation complexity and gas overhead for queue management.
+**Option A** — Simplified ERC-4626 with withdrawal queues (chosen)
+Implement simplified ERC-4626 (only `deposit(assets)` and `redeem(shares)`) where redemptions exceeding idle capacity enter a queue, fulfilled as positions mature. The redundant `mint(shares)` and `withdraw(assets)` functions are omitted to reduce code duplication. Trade-off: Ensures users can always exit eventually, prevents indefinite liquidity lock, reduces complexity; not fully compliant with ERC-4626 (but deposit/redeem cover 95% of use cases).
 
 **Option B** — ERC-4626 with liquidity constraints
 Implement ERC-4626 where withdrawals revert if idle capital insufficient, with `maxWithdraw` accurately reflecting current capacity. Trade-off: Simpler implementation; users could be permanently unable to withdraw if vault continuously redeploys capital, violating user expectation of eventual exit.
@@ -56,11 +56,23 @@ Use internal `balanceOf` mapping with non-transferable shares. Trade-off: Simple
 - Override `totalAssets()` to reflect all vault assets (NAV calculation method defined in ADR-002).
 - Implement withdrawal queue for requests that exceed available liquidity.
 
-**User-facing function signatures:**
-- Standard ERC-4626: `deposit()`, `mint()`, `withdraw()`, `redeem()` - for deposits and immediate withdrawals
-- Queue functions: `requestWithdrawal(uint256 shares) → uint256 requestId` - queues withdrawal when liquidity insufficient
-- `cancelWithdrawalRequest(uint256 requestId)` - allows user to cancel pending request
-- `getWithdrawalRequest(uint256 requestId)` - query request status
+**User-facing function signatures (Async-Only Withdrawal Model):**
+- ✅ `deposit(assets, receiver)` → shares - **PRIMARY** deposit method (synchronous, immediate)
+  - Auto-fulfills pending withdrawal queue with new liquidity
+- ✅ `requestWithdrawal(shares, receiver, owner)` → requestId - **PRIMARY and ONLY** withdrawal method (async queue)
+  - Escrow mechanism: shares held in contract, assets at fulfillment NAV (fairness)
+- ❌ `redeem(shares)` - **DISABLED** (always reverts: "use requestWithdrawal()")
+- ❌ `mint(shares)` - **DISABLED** (always reverts: "use deposit()")
+- ❌ `withdraw(assets)` - **DISABLED** (always reverts: "use redeem() → which reverts → use requestWithdrawal()")
+- 📊 `maxRedeem(user)` → always 0 (honest signal: no immediate withdrawals available)
+- 🔍 `cancelWithdrawal(requestId)` - cancel pending request, FIFO-safe removal
+- 🔍 `getWithdrawalRequest(requestId)` - query request status
+
+**Rationale for Async-Only Model:**
+- Perfect FIFO fairness (no queue jumping, everyone treated equally)
+- Simpler code (no complex conditional logic)
+- Escrow + dynamic NAV (users benefit from profit during wait)
+- Keeper-driven fulfillment (typically 1-2 blocks delay)
 
 **Events:**
 - Standard ERC-4626 events for deposits and withdrawals

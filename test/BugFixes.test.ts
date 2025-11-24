@@ -334,7 +334,7 @@ describe("Bug Fixes - Critical Issues", function () {
   });
 
   describe("Bug Fix: claimPosition Access Control", function () {
-    it("should reject claimPosition from non-keeper", async function () {
+    it("should allow anyone to call claimPosition (permissionless)", async function () {
       const [, , , nonKeeper] = await ethers.getSigners();
 
       const sUsdeAmount = ethers.parseEther("100");
@@ -348,9 +348,11 @@ describe("Bug Fixes - Critical Issues", function () {
 
       await time.increase(COOLDOWN_PERIOD + 1);
 
-      await expect(
-        vault.connect(nonKeeper).claimPosition()
-      ).to.be.revertedWith("Caller is not a keeper");
+      // Permissionless: non-keeper should be able to claim
+      await vault.connect(nonKeeper).claimPosition();
+
+      // Verify position was claimed
+      expect(await vault.activePositionCount()).to.equal(0);
     });
 
     it("should allow claimPosition from authorized keeper", async function () {

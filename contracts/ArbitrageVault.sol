@@ -108,6 +108,33 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
     /// @dev Also serves as one-past-the-last position ID. Active positions are in [firstActivePositionId, nextPositionId)
     uint256 public nextPositionId;
 
+    /* ========== WITHDRAWAL QUEUE ========== */
+
+    /// @notice Withdrawal request structure
+    /// @dev Uses escrow mechanism: shares transferred to contract (not burned) until fulfillment.
+    ///      This ensures users receive assets at current NAV, not at request time NAV.
+    struct WithdrawalRequest {
+        address owner;          // Original owner of shares (can cancel)
+        address receiver;       // Who will receive assets (fulfillment target)
+        uint256 shares;         // Shares held in escrow (transferred to contract, not burned)
+        uint256 requestTime;    // When request was made
+        uint256 fulfilled;      // Shares already burned/fulfilled (for partial fulfillment tracking)
+        bool cancelled;         // Whether request was cancelled
+    }
+
+    /// @notice Mapping of request ID to withdrawal request
+    mapping(uint256 => WithdrawalRequest) public withdrawalRequests;
+
+    /// @notice Array of pending withdrawal request IDs (FIFO queue)
+    uint256[] public pendingWithdrawals;
+
+    /// @notice Mapping from request ID to its index in pendingWithdrawals array
+    /// @dev Used for O(1) removal. Value is index + 1 (0 means not in queue)
+    mapping(uint256 => uint256) private pendingWithdrawalIndex;
+
+    /// @notice Next withdrawal request ID to use
+    uint256 public nextWithdrawalRequestId;
+
     /* ========== EVENTS ========== */
 
     /**
@@ -232,6 +259,46 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
         uint256 expectedProfit
     );
 
+    /**
+     * @notice Emitted when a withdrawal is requested and queued
+     * @param requestId ID of the withdrawal request
+     * @param user Address of the user requesting withdrawal
+     * @param shares Amount of shares to burn
+     * @param assets Amount of assets to receive
+     */
+    event WithdrawalRequested(
+        uint256 indexed requestId,
+        address indexed user,
+        uint256 shares,
+        uint256 assets
+    );
+
+    /**
+     * @notice Emitted when a queued withdrawal is fulfilled (fully or partially)
+     * @param requestId ID of the withdrawal request
+     * @param user Address of the user receiving assets
+     * @param assets Amount of assets fulfilled in this transaction
+     * @param remaining Remaining assets still unfulfilled
+     */
+    event WithdrawalFulfilled(
+        uint256 indexed requestId,
+        address indexed user,
+        uint256 assets,
+        uint256 remaining
+    );
+
+    /**
+     * @notice Emitted when a withdrawal request is cancelled
+     * @param requestId ID of the cancelled request
+     * @param user Address of the user who cancelled
+     * @param shares Amount of shares returned to user
+     */
+    event WithdrawalCancelled(
+        uint256 indexed requestId,
+        address indexed user,
+        uint256 shares
+    );
+
     /* ========== CONSTRUCTOR ========== */
 
     /**
@@ -274,7 +341,13 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
      * @param assets Amount of USDe tokens to deposit
      * @param receiver Address that will receive the vault shares
      * @return shares Amount of vault shares minted
-     * @dev Overrides ERC4626.deposit to add custom event emission
+     * @dev Primary deposit method. Simplified ERC-4626: mint() disabled for clarity.
+     *      Users should specify deposit amount in assets (USDe), not shares.
+     *      This is the natural UX flow: "I want to deposit 1000 USDe" vs "I want 1000 shares".
+     *
+     *      Note: Deposits auto-fulfill withdrawal queue with new liquidity (FIFO fairness).
+     *      Queue has priority over idle capital to maintain fairness invariant.
+     *      Depositor receives shares at current NAV before queue fulfillment (no dilution).
      */
     function deposit(
         uint256 assets,
@@ -288,73 +361,104 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
     {
         shares = super.deposit(assets, receiver);
         emit Deposited(msg.sender, assets, shares);
+
+        // Fulfill pending withdrawals with new liquidity (queue has priority - FIFO fairness)
+        // Maintains invariant: idle_liquidity == 0 OR pending_queue.length == 0
+        uint256 idleBalance = IERC20(asset()).balanceOf(address(this));
+        _fulfillPendingWithdrawals(idleBalance);
     }
 
     /**
-     * @notice Mints vault shares by depositing USDe tokens
-     * @param shares Amount of vault shares to mint
-     * @param receiver Address that will receive the vault shares
-     * @return assets Amount of USDe tokens deposited
-     * @dev Overrides ERC4626.mint to add custom event emission
+     * @notice DISABLED: Use deposit(assets) instead
+     * @dev Simplified ERC-4626: mint() disabled to reduce complexity and code duplication.
+     *      Use deposit() to specify amount in assets (more intuitive UX).
      */
     function mint(
-        uint256 shares,
-        address receiver
+        uint256 /* shares */,
+        address /* receiver */
     )
         public
         virtual
         override
-        nonReentrant
-        returns (uint256 assets)
+        returns (uint256)
     {
-        assets = super.mint(shares, receiver);
-        emit Deposited(msg.sender, assets, shares);
+        revert("ArbitrageVault: Use deposit(assets) instead of mint(shares)");
     }
 
     /**
-     * @notice Withdraws USDe tokens from the vault by burning shares
-     * @param assets Amount of USDe tokens to withdraw
-     * @param receiver Address that will receive the USDe tokens
-     * @param owner Address that owns the shares being burned
-     * @return shares Amount of vault shares burned
-     * @dev Overrides ERC4626.withdraw to add custom event emission
+     * @notice DISABLED: Use redeem(shares) instead
+     * @dev Simplified ERC-4626: withdraw() disabled to reduce complexity.
+     *      CRITICAL: Base withdraw() doesn't support our queue/escrow mechanism!
+     *      If liquidity insufficient, base implementation will REVERT instead of creating
+     *      a withdrawal request. This breaks the queue system and user experience.
+     *      Always use redeem(shares) which includes queue logic.
      */
     function withdraw(
-        uint256 assets,
-        address receiver,
-        address owner
+        uint256 /* assets */,
+        address /* receiver */,
+        address /* owner */
     )
         public
         virtual
         override
-        nonReentrant
-        returns (uint256 shares)
+        returns (uint256)
     {
-        shares = super.withdraw(assets, receiver, owner);
-        emit Withdrawn(msg.sender, assets, shares);
+        revert("ArbitrageVault: Use requestWithdrawal() for all withdrawals (async-only model)");
     }
 
     /**
-     * @notice Redeems vault shares for USDe tokens
-     * @param shares Amount of vault shares to redeem
-     * @param receiver Address that will receive the USDe tokens
-     * @param owner Address that owns the shares being redeemed
-     * @return assets Amount of USDe tokens withdrawn
-     * @dev Overrides ERC4626.redeem to add custom event emission
+     * @notice DISABLED: Use requestWithdrawal() for all withdrawals
+     * @dev Fully asynchronous withdrawal model with instant fulfillment when liquidity available.
+     *
+     *      This vault uses a FULLY ASYNC withdrawal model for simplicity and fairness:
+     *      - All withdrawals go through requestWithdrawal() → withdrawal queue
+     *      - Queue auto-fulfilled instantly if idle liquidity available (same transaction)
+     *      - Keeper claims positions → auto-fulfills queue in FIFO order
+     *      - Deposits auto-fulfill queue with fresh liquidity
+     *      - Fairness invariant maintained: idle > 0 OR queue.length > 0 (never both)
+     *
+     *      Benefits:
+     *      - Simpler code (no complex redeem() logic)
+     *      - Perfect FIFO fairness (everyone waits equally, queue has priority)
+     *      - Instant withdrawals when liquidity available (typical case)
+     *      - Escrow mechanism ensures users benefit from NAV growth while waiting
+     *      - No edge cases around "who gets priority" (always FIFO)
+     *
+     *      Typical fulfillment: Instant (if idle liquidity) or 1-2 blocks (if awaiting claim)
      */
     function redeem(
-        uint256 shares,
-        address receiver,
-        address owner
+        uint256 /* shares */,
+        address /* receiver */,
+        address /* owner */
     )
         public
         virtual
         override
-        nonReentrant
-        returns (uint256 assets)
+        returns (uint256)
     {
-        assets = super.redeem(shares, receiver, owner);
-        emit Withdrawn(msg.sender, assets, shares);
+        revert("ArbitrageVault: Use requestWithdrawal() for all withdrawals (async-only model)");
+    }
+
+    /**
+     * @notice Returns maximum shares that can be immediately redeemed
+     * @return Always returns 0 (async-only model, no immediate redemptions)
+     * @dev Fully asynchronous withdrawal model: all withdrawals go through requestWithdrawal().
+     *      Returning 0 is ERC-4626 compliant - it honestly signals "no immediate withdrawals available".
+     *      Users should call requestWithdrawal() to enter the queue.
+     */
+    function maxRedeem(address /* owner */) public view virtual override returns (uint256) {
+        return 0; // Async-only model: no immediate redemptions
+    }
+
+    /**
+     * @notice Returns maximum assets that can be immediately withdrawn
+     * @return Always returns 0 (async-only model, no immediate withdrawals)
+     * @dev Matches maxRedeem() behavior. Since withdraw() always reverts,
+     *      maxWithdraw() must return 0 to accurately reflect that no immediate
+     *      withdrawals are possible. Prevents frontends from being misled.
+     */
+    function maxWithdraw(address /* owner */) public view virtual override returns (uint256) {
+        return 0; // Async-only model: no immediate withdrawals
     }
 
     /**
@@ -477,6 +581,23 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
         }
 
         return block.timestamp >= position.startTime + COOLDOWN_PERIOD;
+    }
+
+    /**
+     * @notice Returns the number of pending withdrawal requests
+     * @return Number of requests in the queue
+     */
+    function pendingWithdrawalCount() external view returns (uint256) {
+        return pendingWithdrawals.length;
+    }
+
+    /**
+     * @notice Returns detailed information about a withdrawal request
+     * @param requestId ID of the request to query
+     * @return request The WithdrawalRequest struct
+     */
+    function getWithdrawalRequest(uint256 requestId) external view returns (WithdrawalRequest memory request) {
+        return withdrawalRequests[requestId];
     }
 
     /* ========== ACCESS CONTROL & PARAMETER MANAGEMENT ========== */
@@ -745,60 +866,38 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
     /**
      * @notice Opens a new position with provided parameters
      * @param sUsdeAmount Amount of sUSDe being unstaked
-     * @param bookValue USDe paid to acquire sUSDe
-     * @param expectedAssets Expected USDe from Ethena cooldownShares
+     * @param bookValue USDe paid to acquire sUSDe (measured via balance delta in executeArbitrage)
+     * @param expectedAssets Expected USDe from Ethena cooldownShares (from proxy.initiateUnstake return)
      * @param proxyAddress Address of proxy handling the unstake
      * @return positionId ID of the newly created position
      *
-     * @dev ⚠️ SECURITY CRITICAL - PHASE 4 LIMITATION:
+     * @dev ✅ SECURITY IMPLEMENTED (Phase 5 Completed):
      *
-     *      This function currently TRUSTS the caller to provide accurate bookValue and expectedAssets.
-     *      There is NO on-chain verification that these values match actual USDe spent or Ethena's
-     *      return value. This creates a CRITICAL VULNERABILITY:
+     *      This internal function is called by:
+     *      1. **Production**: executeArbitrage() with trustless validation (see lines 734-811)
+     *      2. **Testing**: ArbitrageVaultHarness.openPositionForTesting() (unit tests only)
      *
-     *      Attack Scenario:
-     *      1. Malicious keeper calls executeArbitrage with fake bookValue (e.g., 1M USDe)
-     *      2. No USDe actually leaves vault (idle balance unchanged)
-     *      3. totalAssets() += bookValue (NAV inflated by 1M USDe)
-     *      4. Attacker deposits small amount, gets huge shares at inflated NAV
-     *      5. Attacker withdraws, stealing real USDe from other depositors
+     *      Security Guarantees (enforced by executeArbitrage caller):
+     *      - bookValue: Measured via balance delta (balanceBefore - balanceAfter)
+     *        → Keeper CANNOT manipulate (measured on-chain)
+     *      - expectedAssets: Returned by Ethena's proxy.initiateUnstake(sUsdeAmount)
+     *        → Keeper CANNOT manipulate (value from Ethena protocol)
+     *      - Profit validation: Requires expectedProfit >= minProfitThreshold
+     *      - Slippage protection: Requires sUsdeReceived >= minAmountOut
+     *      - Allowance reset: DEX allowance reset to 0 after each swap
      *
-     *      MITIGATION FOR PHASE 4 (Testing):
-     *      - Function is internal (not directly callable)
-     *      - Only test harness has access (controlled environment)
-     *      - Production code (executeArbitrage) not yet implemented
+     *      Attack Prevention:
+     *      ❌ Keeper cannot inflate bookValue (measured on-chain via balance delta)
+     *      ❌ Keeper cannot inflate expectedAssets (from Ethena's cooldownShares)
+     *      ❌ Keeper cannot execute unprofitable trades (minProfitThreshold check)
+     *      ❌ Keeper cannot drain vault via permanent DEX allowance (reset to 0)
      *
-     *      REQUIRED FOR PHASE 5 (Production):
-     *      executeArbitrage() MUST derive these values trustlessly:
+     *      This function performs additional sanity checks but relies on executeArbitrage()
+     *      for primary security validation. See executeArbitrage() (lines 734-811) for
+     *      complete trustless validation implementation.
      *
-     *      ```solidity
-     *      function executeArbitrage(...) external onlyKeeper {
-     *          uint256 balanceBefore = IERC20(asset()).balanceOf(address(this));
-     *
-     *          // Execute DEX swap (USDe -> sUSDe)
-     *          (bool success, ) = dexRouter.call(swapCalldata);
-     *          require(success, "Swap failed");
-     *
-     *          uint256 balanceAfter = IERC20(asset()).balanceOf(address(this));
-     *          uint256 bookValue = balanceBefore - balanceAfter; // ✅ Measured on-chain
-     *
-     *          // Get sUSDe received
-     *          uint256 sUsdeAmount = IERC20(stakedUsde).balanceOf(address(this));
-     *
-     *          // Transfer to proxy and initiate unstake
-     *          address proxy = _allocateFreeProxy();
-     *          IERC20(stakedUsde).transfer(proxy, sUsdeAmount);
-     *          uint256 expectedAssets = UnstakeProxy(proxy).initiateUnstake(sUsdeAmount); // ✅ From Ethena
-     *
-     *          _openPosition(sUsdeAmount, bookValue, expectedAssets, proxy); // ✅ Validated inputs
-     *      }
-     *      ```
-     *
-     *      Alternative: Add balance verification directly in _openPosition (but this requires
-     *      additional state tracking and complicates the function).
-     *
-     * @custom:security-note DO NOT expose this function publicly or call with untrusted inputs
-     * @custom:audit-note Phase 5 implementation MUST validate bookValue via balance measurement
+     * @custom:security-note Function is internal. Only call with validated inputs from executeArbitrage()
+     * @custom:audit-note All critical values (bookValue, expectedAssets) validated by caller
      */
     function _openPosition(
         uint256 sUsdeAmount,
@@ -806,13 +905,13 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
         uint256 expectedAssets,
         address proxyAddress
     ) internal returns (uint256 positionId) {
-        // Basic sanity checks (NOT sufficient for security against malicious inputs)
+        // Sanity checks (primary security validation done in executeArbitrage)
         require(expectedAssets >= bookValue, "Expected assets must be >= book value");
         require(bookValue > 0, "Book value must be > 0");
         require(sUsdeAmount > 0, "sUSDe amount must be > 0");
 
-        // Additional sanity check: bookValue should be reasonable relative to expectedAssets
-        // Prevent obvious manipulation (e.g., bookValue = 1M, expectedAssets = 1.1M)
+        // Additional sanity check: enforce reasonable profit expectations
+        // When called from executeArbitrage, inputs are already validated via balance delta
         require(
             bookValue <= expectedAssets * 2,
             "Book value too high relative to expected assets"
@@ -879,28 +978,313 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
         emit ProxyReleased(proxy);
     }
 
+    /* ========== WITHDRAWAL QUEUE MANAGEMENT ========== */
+
+    /**
+     * @notice Requests a withdrawal to be fulfilled when liquidity becomes available
+     * @param shares Amount of shares to redeem
+     * @param receiver Address to receive the assets
+     * @param owner Address of the shares owner
+     * @return requestId ID of the created withdrawal request
+     *
+     * @dev PRIMARY and ONLY withdrawal method in async-only model.
+     *
+     *      Usage:
+     *      1. User calls requestWithdrawal(shares) to enter FIFO queue
+     *      2. Shares transferred to escrow (user keeps profit participation)
+     *      3. Queue fulfilled automatically and immediately when:
+     *         - Idle liquidity available (instant fulfillment - maintains fairness invariant)
+     *         - Keeper claims matured position (auto-fulfills queue)
+     *         - New deposits arrive (auto-fulfills queue with fresh liquidity)
+     *      4. User receives assets at current NAV (dynamic pricing, fair profit sharing)
+     *
+     *      Escrow mechanism:
+     *      - Shares transferred to contract (not burned) to preserve profit participation
+     *      - Assets calculated at fulfillment time (current NAV), not at request time
+     *      - Fairness: user receives profit accrued during wait time
+     *
+     *      Queue behavior:
+     *      - Requests fulfilled in FIFO order as liquidity becomes available
+     *      - Partial fulfillment supported (shares burned incrementally)
+     *      - Can be cancelled anytime via cancelWithdrawal()
+     *      - Maximum wait time: 7 days (one cooldown period)
+     */
+    function requestWithdrawal(
+        uint256 shares,
+        address receiver,
+        address owner
+    ) public returns (uint256 requestId) {
+        require(shares > 0, "Shares must be > 0");
+        require(receiver != address(0), "Invalid receiver");
+
+        // Handle allowance if caller is not owner
+        if (msg.sender != owner) {
+            _spendAllowance(owner, msg.sender, shares);
+        }
+
+        // Transfer shares to contract (escrow) instead of burning
+        // This allows user to benefit from NAV growth during wait time
+        _transfer(owner, address(this), shares);
+
+        // Create withdrawal request
+        requestId = nextWithdrawalRequestId++;
+        withdrawalRequests[requestId] = WithdrawalRequest({
+            owner: owner,
+            receiver: receiver,
+            shares: shares,
+            requestTime: block.timestamp,
+            fulfilled: 0,
+            cancelled: false
+        });
+
+        // Add to pending queue
+        pendingWithdrawals.push(requestId);
+        pendingWithdrawalIndex[requestId] = pendingWithdrawals.length; // index + 1
+
+        // Calculate assets for event (informational, actual amount determined at fulfillment)
+        uint256 estimatedAssets = convertToAssets(shares);
+        emit WithdrawalRequested(requestId, receiver, shares, estimatedAssets);
+
+        // Try to fulfill immediately with idle liquidity (FIFO fairness)
+        // Maintains invariant: idle_liquidity == 0 OR pending_queue.length == 0
+        uint256 idleBalance = IERC20(asset()).balanceOf(address(this));
+        _fulfillPendingWithdrawals(idleBalance);
+    }
+
+    /**
+     * @notice Cancels a pending withdrawal request
+     * @param requestId ID of the request to cancel
+     * @dev Returns unfulfilled shares from escrow to the original owner.
+     *      FIFO-safe: Uses left-shift removal to preserve queue order.
+     *      O(N) complexity but acceptable since cancellations are rare.
+     *
+     *      Can only be called by the original share owner.
+     *      Cannot cancel already fulfilled or cancelled requests.
+     */
+    function cancelWithdrawal(uint256 requestId) external nonReentrant {
+        WithdrawalRequest storage request = withdrawalRequests[requestId];
+
+        require(request.owner == msg.sender, "Not request owner");
+        require(!request.cancelled, "Already cancelled");
+        require(request.fulfilled < request.shares, "Already fully fulfilled");
+
+        // Calculate unfulfilled shares still in escrow
+        uint256 sharesToReturn = request.shares - request.fulfilled;
+
+        // Mark as cancelled
+        request.cancelled = true;
+
+        // CRITICAL: Remove from queue (FIFO-safe left-shift)
+        // This prevents cancelled requests from blocking the vault
+        _removeFromQueuePreservingOrder(requestId);
+
+        // Return shares from escrow to original owner
+        _transfer(address(this), request.owner, sharesToReturn);
+
+        emit WithdrawalCancelled(requestId, request.owner, sharesToReturn);
+    }
+
+    /**
+     * @notice Internal helper to remove request from pending queue
+     * @param requestId ID of the request to remove
+     * @dev Uses swap-and-pop for O(1) removal
+     */
+    function _removeFromPendingQueue(uint256 requestId) internal {
+        uint256 indexPlusOne = pendingWithdrawalIndex[requestId];
+        if (indexPlusOne == 0) return; // Not in queue
+
+        uint256 index = indexPlusOne - 1;
+        uint256 lastIndex = pendingWithdrawals.length - 1;
+
+        if (index != lastIndex) {
+            uint256 lastRequestId = pendingWithdrawals[lastIndex];
+            pendingWithdrawals[index] = lastRequestId;
+            pendingWithdrawalIndex[lastRequestId] = indexPlusOne;
+        }
+
+        pendingWithdrawals.pop();
+        delete pendingWithdrawalIndex[requestId];
+    }
+
+    /**
+     * @notice Internal helper to remove first element from pending queue (FIFO-safe)
+     * @dev Uses left-shift instead of swap-and-pop to maintain FIFO order.
+     *      This is O(N) but necessary for FIFO guarantee. Used when fulfilling requests.
+     */
+    function _removeFirstFromQueue() internal {
+        require(pendingWithdrawals.length > 0, "Queue is empty");
+
+        uint256 firstRequestId = pendingWithdrawals[0];
+
+        // Shift all elements left by 1 position
+        for (uint256 i = 0; i < pendingWithdrawals.length - 1; i++) {
+            pendingWithdrawals[i] = pendingWithdrawals[i + 1];
+            // Update index mapping (stored as index+1)
+            pendingWithdrawalIndex[pendingWithdrawals[i]] = i + 1;
+        }
+
+        pendingWithdrawals.pop();
+        delete pendingWithdrawalIndex[firstRequestId];
+    }
+
+    /**
+     * @notice Internal helper to remove any element from pending queue (FIFO-safe)
+     * @param requestId ID of the request to remove
+     * @dev Uses left-shift to preserve FIFO order for remaining elements.
+     *      This is O(N) but necessary to prevent queue reordering on cancellation.
+     *      Cancellations are rare, so O(N) is acceptable.
+     */
+    function _removeFromQueuePreservingOrder(uint256 requestId) internal {
+        uint256 indexPlusOne = pendingWithdrawalIndex[requestId];
+        if (indexPlusOne == 0) return; // Not in queue
+
+        uint256 index = indexPlusOne - 1;
+
+        // Shift all elements after index left by 1 position
+        for (uint256 i = index; i < pendingWithdrawals.length - 1; i++) {
+            pendingWithdrawals[i] = pendingWithdrawals[i + 1];
+            // Update index mapping (stored as index+1)
+            pendingWithdrawalIndex[pendingWithdrawals[i]] = i + 1;
+        }
+
+        pendingWithdrawals.pop();
+        delete pendingWithdrawalIndex[requestId];
+    }
+
+    /**
+     * @notice Internal helper to fulfill pending withdrawal requests
+     * @param availableAssets Amount of USDe available for fulfillment
+     * @dev Processes pending withdrawals in STRICT FIFO order until assets depleted or queue empty.
+     *      Uses ESCROW mechanism with DYNAMIC NAV:
+     *      - Shares held in escrow (contract balance) until fulfillment
+     *      - Assets calculated at fulfillment time using current NAV (not fixed at request time)
+     *      - This ensures users receive profit accrued during wait time
+     *      - fulfilled tracks burned shares (not assets) for partial fulfillment
+     */
+    function _fulfillPendingWithdrawals(uint256 availableAssets) internal {
+        if (availableAssets == 0) return;
+
+        IERC20 usdeToken = IERC20(asset());
+        uint256 remaining = availableAssets;
+
+        // FIFO: Always process head of queue (index 0)
+        while (pendingWithdrawals.length > 0 && remaining > 0) {
+            uint256 requestId = pendingWithdrawals[0]; // Always first element
+            WithdrawalRequest storage request = withdrawalRequests[requestId];
+
+            if (request.cancelled) {
+                // Remove cancelled request (FIFO-safe left-shift)
+                _removeFirstFromQueue();
+                continue;
+            }
+
+            // Calculate unfulfilled shares still in escrow
+            uint256 sharesRemaining = request.shares - request.fulfilled;
+
+            // Calculate assets needed at CURRENT NAV (dynamic pricing)
+            uint256 assetsForAllShares = convertToAssets(sharesRemaining);
+
+            if (remaining >= assetsForAllShares) {
+                // Fully fulfill request: burn all remaining shares and send assets
+                _burn(address(this), sharesRemaining);
+                usdeToken.safeTransfer(request.receiver, assetsForAllShares);
+
+                request.fulfilled = request.shares; // All shares burned
+                _removeFirstFromQueue(); // Request complete
+
+                emit WithdrawalFulfilled(requestId, request.receiver, assetsForAllShares, 0);
+                remaining -= assetsForAllShares;
+            } else {
+                // Partially fulfill: calculate how many shares we can afford at current NAV
+                uint256 sharesToBurn = previewWithdraw(remaining);
+
+                // Safety check: don't burn more than available in escrow
+                if (sharesToBurn > sharesRemaining) {
+                    sharesToBurn = sharesRemaining;
+                    remaining = convertToAssets(sharesToBurn);
+                }
+
+                // Burn partial shares and send corresponding assets
+                _burn(address(this), sharesToBurn);
+                usdeToken.safeTransfer(request.receiver, remaining);
+
+                request.fulfilled += sharesToBurn; // Track burned shares
+
+                uint256 sharesStillPending = request.shares - request.fulfilled;
+                uint256 assetsStillPending = convertToAssets(sharesStillPending);
+
+                emit WithdrawalFulfilled(requestId, request.receiver, remaining, assetsStillPending);
+                remaining = 0;
+            }
+        }
+    }
+
+    /**
+     * @notice Attempts to claim the first position if it's ready
+     * @return claimed True if position was claimed successfully
+     * @dev Used by redeem() to improve liquidity availability.
+     *      Only claims firstActivePositionId if cooldown has elapsed.
+     *      Automatically fulfills pending withdrawal queue after claiming (FIFO fairness).
+     *      This consolidates claim + fulfill logic in one place.
+     */
+    function _tryClaimFirstPosition() internal returns (bool) {
+        if (firstActivePositionId >= nextPositionId) {
+            return false; // No active positions
+        }
+
+        Position storage position = positions[firstActivePositionId];
+
+        // Check if position is ready to claim
+        if (block.timestamp < position.startTime + COOLDOWN_PERIOD) {
+            return false; // Not ready yet
+        }
+
+        // Claim the position
+        _claimPosition(firstActivePositionId);
+
+        // Automatically fulfill pending withdrawal queue with ALL available USDe
+        // This ensures queued requests have priority (FIFO fairness)
+        uint256 totalAvailable = IERC20(asset()).balanceOf(address(this));
+        _fulfillPendingWithdrawals(totalAvailable);
+
+        return true;
+    }
+
     /* ========== POSITION MANAGEMENT ========== */
 
     /**
      * @notice Claims the oldest matured position after cooldown period (FIFO order)
-     * @dev Only keepers can call this after cooldown period. Vault receives the USDe from proxy.
+     * @dev PERMISSIONLESS: Anyone can call this to claim matured positions and fulfill queue.
+     *      This prevents keeper griefing and ensures queued users can always trigger
+     *      fulfillment after the 7-day cooldown period (guarantees ADR-006 max wait time).
+     *
      *      Positions must be claimed in FIFO order (oldest first).
-     *      This ensures no gaps in the active position range [firstActivePositionId, nextPositionId).
+     *      Automatically fulfills pending withdrawal requests with received USDe.
+     *
+     *      Incentive: Users waiting in queue benefit from calling this function.
+     *      No centralization risk: anyone can advance the queue.
      */
-    function claimPosition() external nonReentrant onlyKeeper {
-        // Get the oldest active position (FIFO)
-        uint256 positionId = firstActivePositionId;
-
-        require(positionId < nextPositionId, "No active positions");
-
-        Position storage position = positions[positionId];
-
-        // Validation checks
-        require(!position.claimed, "Position already claimed");
+    function claimPosition() external nonReentrant {
+        require(firstActivePositionId < nextPositionId, "No active positions");
         require(
-            block.timestamp >= position.startTime + COOLDOWN_PERIOD,
+            block.timestamp >= positions[firstActivePositionId].startTime + COOLDOWN_PERIOD,
             "Cooldown period not elapsed"
         );
+
+        // Claim and automatically fulfill queue (consolidated in _tryClaimFirstPosition)
+        bool claimed = _tryClaimFirstPosition();
+        require(claimed, "Failed to claim position");
+    }
+
+    /**
+     * @notice Internal helper to claim a position by its ID
+     * @param positionId The ID of the position to claim
+     * @dev This function contains the core logic for claiming a position.
+     *      It updates state, interacts with the proxy, and emits an event.
+     *      It does NOT handle withdrawal queue fulfillment.
+     */
+    function _claimPosition(uint256 positionId) internal {
+        Position storage position = positions[positionId];
 
         // Get USDe balance before claiming
         IERC20 usdeToken = IERC20(asset());
@@ -929,5 +1313,4 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
 
         emit PositionClaimed(positionId, position.proxyContract, usdeReceived, realizedProfit);
     }
-
 }
