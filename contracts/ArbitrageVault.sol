@@ -69,6 +69,9 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
     /// @notice Address that receives collected fees
     address public feeRecipient;
 
+    /// @notice Total fees collected to date (in USDe)
+    uint256 public totalFeesCollected;
+
     /// @notice Minimum profit threshold in basis points (default 10 = 0.1%)
     uint256 public minProfitThreshold;
 
@@ -212,6 +215,18 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
      * @param newThreshold New threshold in basis points
      */
     event MinProfitThresholdUpdated(uint256 oldThreshold, uint256 newThreshold);
+
+    /**
+     * @notice Emitted when performance fee is collected on position claim
+     * @param positionId ID of the position that was claimed
+     * @param feeAmount Amount of fee collected (in USDe)
+     * @param realizedProfit Total realized profit from the position (in USDe)
+     */
+    event FeeCollected(
+        uint256 indexed positionId,
+        uint256 feeAmount,
+        uint256 realizedProfit
+    );
 
     /**
      * @notice Emitted when a new position is opened
@@ -462,11 +477,17 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
     }
 
     /**
-     * @notice Returns the total assets under management (NAV)
-     * @return Total amount of USDe tokens managed by the vault
-     * @dev Implements time-weighted NAV calculation with FIFO-based iteration:
-     *      NAV = idle USDe + Σ(bookValue[i] + accruedProfit[i]) for all active positions
-     *      where accruedProfit[i] = expectedProfit[i] * min(elapsed[i], COOLDOWN_PERIOD) / COOLDOWN_PERIOD
+     * @notice Returns the total assets under management (NAV) - NET OF FEES
+     * @return Total amount of USDe tokens managed by the vault (net of performance fees)
+     * @dev Implements time-weighted NAV calculation with FIFO-based iteration and fee discount:
+     *      NAV = idle USDe + Σ(bookValue[i] + netAccruedProfit[i]) for all active positions
+     *      where netAccruedProfit[i] = accruedProfit[i] × (1 - performanceFee%)
+     *
+     *      Net-of-Fee Approach (ADR-007):
+     *      - Unrealized profit is discounted by performance fee in NAV calculation
+     *      - Share value always reflects net-of-fee economics
+     *      - When position claimed, actual fee transferred to feeRecipient
+     *      - Vault receives net amount, which matches NAV prediction (invariant maintained)
      *
      *      Active positions are in range [firstActivePositionId, nextPositionId).
      *      FIFO claim order ensures no gaps in this range.
@@ -480,7 +501,14 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
     function totalAssets() public view virtual override returns (uint256) {
         uint256 idleAssets = IERC20(asset()).balanceOf(address(this));
         (uint256 totalBookValue, uint256 totalProfit) = _calculatePositionsValue();
-        return idleAssets + totalBookValue + totalProfit;
+
+        // Apply performance fee discount to unrealized profit
+        // netProfit = grossProfit × (1 - fee%)
+        uint256 netProfit = performanceFee > 0
+            ? (totalProfit * (BASIS_POINTS - performanceFee)) / BASIS_POINTS
+            : totalProfit;
+
+        return idleAssets + totalBookValue + netProfit;
     }
 
     /**
@@ -1301,6 +1329,17 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
         uint256 realizedProfit = usdeReceived > position.bookValue
             ? usdeReceived - position.bookValue
             : 0;
+
+        // Collect performance fee on realized profit (ADR-007: Net-of-Fee NAV)
+        // Fee transferred immediately to recipient, vault keeps net amount
+        // This maintains invariant: vault_balance == NAV_prediction
+        if (realizedProfit > 0 && performanceFee > 0) {
+            uint256 feeAmount = (realizedProfit * performanceFee) / BASIS_POINTS;
+            usdeToken.safeTransfer(feeRecipient, feeAmount);
+            totalFeesCollected += feeAmount;
+
+            emit FeeCollected(positionId, feeAmount, realizedProfit);
+        }
 
         // Mark position as claimed
         position.claimed = true;

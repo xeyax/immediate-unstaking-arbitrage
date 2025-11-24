@@ -210,13 +210,16 @@ describe("ArbitrageVault - Phase 4: Position Tracking & NAV Calculation", functi
       const nav = await vault.totalAssets();
       const accruedProfit = await vault.getAccruedProfit();
 
-      // Should have accrued ~1/7 of the profit (5/7 ≈ 0.714 USDe)
+      // Should have accrued ~1/7 of the profit (5/7 ≈ 0.714 USDe gross)
       const expectedAccrual = expectedProfit / 7n;
       expect(accruedProfit).to.be.closeTo(expectedAccrual, ethers.parseEther("0.001"));
 
-      // NAV = (1000 - 95) idle + 95 book value + ~0.714 accrued = 1000 + 0.714
+      // NAV = (1000 - 95) idle + 95 book value + net accrued profit
+      // Net profit = gross profit × (1 - fee) = 0.714 × 0.9 = 0.6428 (with 10% fee)
+      const performanceFee = await vault.performanceFee(); // 1000 basis points = 10%
+      const netAccrual = (expectedAccrual * (10000n - performanceFee)) / 10000n;
       expect(nav).to.be.closeTo(
-        ethers.parseEther("1000") + expectedAccrual,
+        ethers.parseEther("1000") + netAccrual,
         ethers.parseEther("0.001")
       );
     });

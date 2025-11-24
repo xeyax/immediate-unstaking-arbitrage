@@ -125,4 +125,14 @@ contract ArbitrageVaultHarness is ArbitrageVault {
         return _openPosition(sUsdeAmount, bookValue, expectedAssets, proxyAddress);
     }
 
+    /**
+     * @notice TEST HELPER: Claims a position by its ID
+     * @param positionId The ID of the position to claim
+     * @dev Exposes internal _claimPosition for direct testing
+     *      Used for testing fee collection mechanism and NAV invariants
+     */
+    function claimPositionForTesting(uint256 positionId) external onlyOwner {
+        _claimPosition(positionId);
+    }
+
 }
