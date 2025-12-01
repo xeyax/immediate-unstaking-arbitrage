@@ -47,3 +47,17 @@ _Related:_ FR-04, FR-05, FR-08
 The vault must collect a performance fee on realized arbitrage profits. The fee percentage must be configurable by authorized roles and the collected fees must be distributed to a designated fee recipient address.
 
 _Related:_ FR-07
+
+## FR-09 — Interface View Functions
+
+The vault must provide view functions for efficient data retrieval by frontend applications and monitoring tools. These functions must aggregate commonly needed data into single calls to minimize RPC requests and improve user experience. The vault must provide:
+
+- **Vault Statistics** (`getVaultStats`): Aggregate vault metrics including total assets, share supply, share price, idle liquidity, active positions count, pending withdrawals count, total fees collected, and fee parameters
+- **User Information** (`getUserInfo`): Aggregate user data including share balance, asset value, number of pending withdrawals, and total amounts in pending withdrawals
+- **User Withdrawal Requests** (`getUserWithdrawals`): List of all withdrawal request IDs for a given user address
+- **Active Positions** (`getActivePositions`): Array of all unclaimed arbitrage positions with their full details
+****
+These functions enable efficient monitoring and display of vault state without requiring multiple separate contract calls.
+
+_Related:_ FR-01, FR-04, FR-06
+
