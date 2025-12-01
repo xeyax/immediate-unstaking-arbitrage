@@ -138,6 +138,33 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
     /// @notice Next withdrawal request ID to use
     uint256 public nextWithdrawalRequestId;
 
+    /// @notice Mapping from user address to their withdrawal request IDs
+    mapping(address => uint256[]) public userWithdrawalIds;
+
+    /* ========== VIEW STRUCTS ========== */
+
+    /// @notice Vault statistics aggregated for UI
+    struct VaultStats {
+        uint256 totalAssets;           // Total NAV (net of fees)
+        uint256 totalShares;           // Total supply of vault shares
+        uint256 sharePrice;            // Price per share (in USDe, scaled by 1e18)
+        uint256 idleAssets;            // Idle USDe balance
+        uint256 activePositions;       // Number of active positions
+        uint256 pendingWithdrawals;    // Number of pending withdrawal requests
+        uint256 totalFeesCollected;    // Total fees collected to date
+        uint256 performanceFee;        // Current performance fee (basis points)
+        uint256 minProfitThreshold;    // Minimum profit threshold (basis points)
+    }
+
+    /// @notice User information aggregated for UI
+    struct UserInfo {
+        uint256 shares;                // User's vault share balance
+        uint256 assets;                // User's assets value (in USDe)
+        uint256 pendingWithdrawals;    // Number of user's pending withdrawals
+        uint256 totalWithdrawalShares; // Total shares in pending withdrawals
+        uint256 totalWithdrawalAssets; // Estimated assets for pending withdrawals
+    }
+
     /* ========== EVENTS ========== */
 
     /**
@@ -628,6 +655,85 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
         return withdrawalRequests[requestId];
     }
 
+    /**
+     * @notice Returns aggregated vault statistics
+     * @return stats VaultStats struct containing key metrics
+     * @dev Provides a single call to fetch all important vault information for UI
+     */
+    function getVaultStats() external view returns (VaultStats memory stats) {
+        uint256 total = totalAssets();
+        uint256 supply = totalSupply();
+
+        stats.totalAssets = total;
+        stats.totalShares = supply;
+        stats.sharePrice = supply > 0 ? (total * 1e18) / supply : 1e18; // Default 1:1 if no shares
+        stats.idleAssets = IERC20(asset()).balanceOf(address(this));
+        stats.activePositions = nextPositionId - firstActivePositionId;
+        stats.pendingWithdrawals = pendingWithdrawals.length;
+        stats.totalFeesCollected = totalFeesCollected;
+        stats.performanceFee = performanceFee;
+        stats.minProfitThreshold = minProfitThreshold;
+    }
+
+    /**
+     * @notice Returns aggregated user information
+     * @param user Address of the user to query
+     * @return info UserInfo struct containing user's balances and pending withdrawals
+     * @dev Provides a single call to fetch all user-related information for UI
+     */
+    function getUserInfo(address user) external view returns (UserInfo memory info) {
+        uint256 userShares = balanceOf(user);
+
+        info.shares = userShares;
+        info.assets = convertToAssets(userShares);
+
+        // Calculate pending withdrawal info
+        uint256[] memory requestIds = userWithdrawalIds[user];
+        uint256 pendingCount = 0;
+        uint256 totalShares = 0;
+
+        for (uint256 i = 0; i < requestIds.length; i++) {
+            WithdrawalRequest storage request = withdrawalRequests[requestIds[i]];
+
+            // Only count non-cancelled and non-fully-fulfilled requests
+            if (!request.cancelled && request.fulfilled < request.shares) {
+                pendingCount++;
+                totalShares += (request.shares - request.fulfilled);
+            }
+        }
+
+        info.pendingWithdrawals = pendingCount;
+        info.totalWithdrawalShares = totalShares;
+        info.totalWithdrawalAssets = convertToAssets(totalShares);
+    }
+
+    /**
+     * @notice Returns all withdrawal request IDs for a user
+     * @param user Address of the user
+     * @return Array of withdrawal request IDs
+     * @dev Use with getWithdrawalRequest() to get detailed info for each request
+     */
+    function getUserWithdrawals(address user) external view returns (uint256[] memory) {
+        return userWithdrawalIds[user];
+    }
+
+    /**
+     * @notice Returns all active (unclaimed) positions
+     * @return Array of Position structs
+     * @dev Returns positions in range [firstActivePositionId, nextPositionId)
+     *      May be gas-intensive if many active positions exist (max 50)
+     */
+    function getActivePositions() external view returns (Position[] memory) {
+        uint256 count = nextPositionId - firstActivePositionId;
+        Position[] memory activePositions = new Position[](count);
+
+        for (uint256 i = 0; i < count; i++) {
+            activePositions[i] = positions[firstActivePositionId + i];
+        }
+
+        return activePositions;
+    }
+
     /* ========== ACCESS CONTROL & PARAMETER MANAGEMENT ========== */
 
     /**
@@ -1068,6 +1174,9 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
         // Add to pending queue
         pendingWithdrawals.push(requestId);
         pendingWithdrawalIndex[requestId] = pendingWithdrawals.length; // index + 1
+
+        // Track user's withdrawal IDs
+        userWithdrawalIds[owner].push(requestId);
 
         // Calculate assets for event (informational, actual amount determined at fulfillment)
         uint256 estimatedAssets = convertToAssets(shares);
