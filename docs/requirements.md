@@ -56,7 +56,7 @@ The vault must provide view functions for efficient data retrieval by frontend a
 - **User Information** (`getUserInfo`): Aggregate user data including share balance, asset value, number of pending withdrawals, and total amounts in pending withdrawals
 - **User Withdrawal Requests** (`getUserWithdrawals`): List of all withdrawal request IDs for a given user address
 - **Active Positions** (`getActivePositions`): Array of all unclaimed arbitrage positions with their full details
-****
+
 These functions enable efficient monitoring and display of vault state without requiring multiple separate contract calls.
 
 _Related:_ FR-01, FR-04, FR-06
