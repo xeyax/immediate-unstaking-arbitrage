@@ -867,11 +867,13 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
         uint256 bookValue;
         uint256 sUsdeReceived;
         uint256 expectedAssets;
+        uint256 sUsdeBefore;
 
         // Scope to avoid stack too deep
         {
-            // Measure USDe balance before swap
+            // Measure balances before swap
             uint256 balanceBefore = usdeToken.balanceOf(address(this));
+            sUsdeBefore = IERC20(address(stakedUsde)).balanceOf(address(this));
 
             // Approve DEX to spend exact amountIn
             usdeToken.forceApprove(dexTarget, amountIn);
@@ -901,10 +903,13 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
         {
             IERC20 sUsdeToken = IERC20(address(stakedUsde));
 
-            // Get sUSDe received from swap
-            sUsdeReceived = sUsdeToken.balanceOf(address(this));
+            // Calculate sUSDe received from swap (delta, not absolute balance)
+            // SECURITY: Prevents donation attacks where pre-existing sUSDe inflates sUsdeReceived
+            uint256 sUsdeAfter = sUsdeToken.balanceOf(address(this));
+            require(sUsdeAfter > sUsdeBefore, "No sUSDe received from swap");
+            sUsdeReceived = sUsdeAfter - sUsdeBefore;
+
             require(sUsdeReceived >= minAmountOut, "Insufficient sUSDe received (slippage)");
-            require(sUsdeReceived > 0, "No sUSDe received");
 
             // Transfer sUSDe to proxy
             sUsdeToken.safeTransfer(proxyAddress, sUsdeReceived);

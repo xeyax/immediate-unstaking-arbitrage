@@ -642,4 +642,143 @@ describe("ArbitrageVault - Phase 5: Arbitrage Execution", function () {
       ).to.be.revertedWith("Swap failed");
     });
   });
+
+  describe("Security: Donation Attack Prevention", function () {
+    it("should measure sUSDe delta, not absolute balance (prevents donation attack)", async function () {
+      // ATTACK SCENARIO:
+      // 1. Attacker donates sUSDe to vault before keeper's swap
+      // 2. Keeper executes bad swap that returns very little sUSDe
+      // 3. WITHOUT FIX: sUsdeReceived = totalBalance (inflated by donation)
+      // 4. WITH FIX: sUsdeReceived = delta only (donation ignored)
+
+      const donationAmount = ethers.parseEther("1000");
+      const vaultAddress = await vault.getAddress();
+
+      // Step 1: Attacker donates sUSDe directly to vault
+      await sUsde.mint(vaultAddress, donationAmount);
+
+      // Verify donation is there
+      const sUsdeBalanceBefore = await sUsde.balanceOf(vaultAddress);
+      expect(sUsdeBalanceBefore).to.equal(donationAmount);
+
+      // Step 2: Execute normal arbitrage
+      const amountIn = ethers.parseEther("1000");
+      const minAmountOut = ethers.parseEther("1045");
+      const swapCalldata = dex.interface.encodeFunctionData("swap", [amountIn, minAmountOut]);
+
+      const tx = await vault.connect(keeper).executeArbitrage(
+        await dex.getAddress(),
+        amountIn,
+        minAmountOut,
+        swapCalldata
+      );
+
+      // Step 3: Verify sUsdeReceived is only the swap delta, NOT total balance
+      const receipt = await tx.wait();
+      const event = receipt?.logs.find(
+        (log: any) => log.eventName === "ArbitrageExecuted"
+      ) as any;
+
+      // With 5% discount: 1000 USDe → ~1050 sUSDe
+      const sUsdeFromSwap = event?.args?.sUsdeReceived;
+
+      // CRITICAL: sUsdeReceived should be ~1050, NOT 1050 + 1000 (donation)
+      expect(sUsdeFromSwap).to.be.closeTo(ethers.parseEther("1050"), ethers.parseEther("5"));
+      expect(sUsdeFromSwap).to.be.lt(donationAmount + ethers.parseEther("1050"));
+    });
+
+    it("should reject swap that returns no sUSDe even with pre-existing balance", async function () {
+      // ATTACK SCENARIO:
+      // 1. Attacker donates large amount of sUSDe to vault
+      // 2. Keeper executes EMPTY swap (returns 0 sUSDe)
+      // 3. WITHOUT FIX: Would pass because totalBalance > minAmountOut
+      // 4. WITH FIX: Fails because delta = 0
+
+      const donationAmount = ethers.parseEther("5000");
+      const vaultAddress = await vault.getAddress();
+
+      // Step 1: Large donation
+      await sUsde.mint(vaultAddress, donationAmount);
+
+      // Step 2: Set DEX to return 0 sUSDe
+      await dex.setExchangeRate(0);
+
+      const amountIn = ethers.parseEther("100");
+      const minAmountOut = 1; // Very low threshold
+      const swapCalldata = dex.interface.encodeFunctionData("swap", [amountIn, minAmountOut]);
+
+      // Step 3: Should fail because delta = 0 (regardless of donation)
+      await expect(
+        vault.connect(keeper).executeArbitrage(
+          await dex.getAddress(),
+          amountIn,
+          minAmountOut,
+          swapCalldata
+        )
+      ).to.be.reverted; // Will revert with "Swap failed" or "No sUSDe received from swap"
+    });
+
+    it("should correctly record position with actual swap amount, not inflated balance", async function () {
+      // Verify position tracking uses delta, not absolute balance
+
+      const donationAmount = ethers.parseEther("2000");
+      const vaultAddress = await vault.getAddress();
+
+      // Donate sUSDe to vault
+      await sUsde.mint(vaultAddress, donationAmount);
+
+      // Execute arbitrage
+      const amountIn = ethers.parseEther("500");
+      const minAmountOut = ethers.parseEther("520");
+      const swapCalldata = dex.interface.encodeFunctionData("swap", [amountIn, minAmountOut]);
+
+      await vault.connect(keeper).executeArbitrage(
+        await dex.getAddress(),
+        amountIn,
+        minAmountOut,
+        swapCalldata
+      );
+
+      // Check position
+      const position = await vault.getPosition(0);
+
+      // sUsdeAmount should be ~525 (5% discount on 500), NOT 2525 (donation + swap)
+      expect(position.sUsdeAmount).to.be.closeTo(ethers.parseEther("525"), ethers.parseEther("5"));
+      expect(position.sUsdeAmount).to.be.lt(donationAmount);
+    });
+
+    it("should not allow unprofitable swap to pass validation via donation", async function () {
+      // ATTACK SCENARIO:
+      // 1. Attacker donates sUSDe to inflate apparent profit
+      // 2. Keeper executes UNPROFITABLE swap
+      // 3. WITHOUT FIX: expectedAssets calculated from inflated sUsdeReceived → profit check passes
+      // 4. WITH FIX: expectedAssets based on actual swap delta → profit check fails
+
+      const donationAmount = ethers.parseEther("10000");
+      const vaultAddress = await vault.getAddress();
+
+      // Step 1: Large donation
+      await sUsde.mint(vaultAddress, donationAmount);
+
+      // Step 2: Set high profit threshold
+      await vault.setMinProfitThreshold(500); // 5%
+
+      // Step 3: Set DEX to very bad rate (0.5% profit only)
+      await dex.setExchangeRate(ethers.parseEther("1.005"));
+
+      const amountIn = ethers.parseEther("1000");
+      const minAmountOut = ethers.parseEther("1000"); // Low threshold to not fail on slippage
+      const swapCalldata = dex.interface.encodeFunctionData("swap", [amountIn, minAmountOut]);
+
+      // Step 4: Should fail profit threshold because delta gives only 0.5% profit
+      await expect(
+        vault.connect(keeper).executeArbitrage(
+          await dex.getAddress(),
+          amountIn,
+          minAmountOut,
+          swapCalldata
+        )
+      ).to.be.revertedWith("Profit below minimum threshold");
+    });
+  });
 });
