@@ -141,6 +141,17 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
     /// @notice Mapping from user address to their withdrawal request IDs
     mapping(address => uint256[]) public userWithdrawalIds;
 
+    /* ========== BATCH PROCESSING CONFIG ========== */
+
+    /// @notice Minimum allowed batch size for withdrawal processing
+    uint256 public constant MIN_BATCH_SIZE = 10;
+
+    /// @notice Maximum allowed batch size for withdrawal processing
+    uint256 public constant MAX_BATCH_SIZE = 50;
+
+    /// @notice Maximum withdrawals to process per transaction (prevents gas limit issues)
+    uint256 public maxWithdrawalsPerTx = 20;
+
     /* ========== VIEW STRUCTS ========== */
 
     /// @notice Vault statistics aggregated for UI
@@ -242,6 +253,9 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
      * @param newThreshold New threshold in basis points
      */
     event MinProfitThresholdUpdated(uint256 oldThreshold, uint256 newThreshold);
+
+    /// @notice Emitted when max withdrawals per tx is updated
+    event MaxWithdrawalsPerTxUpdated(uint256 oldMax, uint256 newMax);
 
     /**
      * @notice Emitted when performance fee is collected on position claim
@@ -811,6 +825,20 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
         emit MinProfitThresholdUpdated(oldThreshold, newThreshold);
     }
 
+    /**
+     * @notice Set maximum withdrawals to process per transaction
+     * @param newMax New maximum (must be between MIN_BATCH_SIZE and MAX_BATCH_SIZE)
+     */
+    function setMaxWithdrawalsPerTx(uint256 newMax) external onlyOwner {
+        require(newMax >= MIN_BATCH_SIZE, "Batch too small");
+        require(newMax <= MAX_BATCH_SIZE, "Batch too large");
+
+        uint256 oldMax = maxWithdrawalsPerTx;
+        maxWithdrawalsPerTx = newMax;
+
+        emit MaxWithdrawalsPerTxUpdated(oldMax, newMax);
+    }
+
     /* ========== ARBITRAGE EXECUTION ========== */
 
     /**
@@ -867,11 +895,13 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
         uint256 bookValue;
         uint256 sUsdeReceived;
         uint256 expectedAssets;
+        uint256 sUsdeBefore;
 
         // Scope to avoid stack too deep
         {
-            // Measure USDe balance before swap
+            // Measure balances before swap
             uint256 balanceBefore = usdeToken.balanceOf(address(this));
+            sUsdeBefore = IERC20(address(stakedUsde)).balanceOf(address(this));
 
             // Approve DEX to spend exact amountIn
             usdeToken.forceApprove(dexTarget, amountIn);
@@ -901,10 +931,13 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
         {
             IERC20 sUsdeToken = IERC20(address(stakedUsde));
 
-            // Get sUSDe received from swap
-            sUsdeReceived = sUsdeToken.balanceOf(address(this));
+            // Calculate sUSDe received from swap (delta, not absolute balance)
+            // SECURITY: Prevents donation attacks where pre-existing sUSDe inflates sUsdeReceived
+            uint256 sUsdeAfter = sUsdeToken.balanceOf(address(this));
+            require(sUsdeAfter > sUsdeBefore, "No sUSDe received from swap");
+            sUsdeReceived = sUsdeAfter - sUsdeBefore;
+
             require(sUsdeReceived >= minAmountOut, "Insufficient sUSDe received (slippage)");
-            require(sUsdeReceived > 0, "No sUSDe received");
 
             // Transfer sUSDe to proxy
             sUsdeToken.safeTransfer(proxyAddress, sUsdeReceived);
@@ -1303,11 +1336,14 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
 
         IERC20 usdeToken = IERC20(asset());
         uint256 remaining = availableAssets;
+        uint256 processed = 0; // Batch limit counter
 
         // FIFO: Always process head of queue (index 0)
-        while (pendingWithdrawals.length > 0 && remaining > 0) {
+        // Batch limit prevents gas exhaustion with large queues
+        while (pendingWithdrawals.length > 0 && remaining > 0 && processed < maxWithdrawalsPerTx) {
             uint256 requestId = pendingWithdrawals[0]; // Always first element
             WithdrawalRequest storage request = withdrawalRequests[requestId];
+            processed++; // Count toward batch limit to prevent gas exhaustion
 
             if (request.cancelled) {
                 // Remove cancelled request (FIFO-safe left-shift)
@@ -1356,37 +1392,6 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
         }
     }
 
-    /**
-     * @notice Attempts to claim the first position if it's ready
-     * @return claimed True if position was claimed successfully
-     * @dev Used by redeem() to improve liquidity availability.
-     *      Only claims firstActivePositionId if cooldown has elapsed.
-     *      Automatically fulfills pending withdrawal queue after claiming (FIFO fairness).
-     *      This consolidates claim + fulfill logic in one place.
-     */
-    function _tryClaimFirstPosition() internal returns (bool) {
-        if (firstActivePositionId >= nextPositionId) {
-            return false; // No active positions
-        }
-
-        Position storage position = positions[firstActivePositionId];
-
-        // Check if position is ready to claim
-        if (block.timestamp < position.startTime + COOLDOWN_PERIOD) {
-            return false; // Not ready yet
-        }
-
-        // Claim the position
-        _claimPosition(firstActivePositionId);
-
-        // Automatically fulfill pending withdrawal queue with ALL available USDe
-        // This ensures queued requests have priority (FIFO fairness)
-        uint256 totalAvailable = IERC20(asset()).balanceOf(address(this));
-        _fulfillPendingWithdrawals(totalAvailable);
-
-        return true;
-    }
-
     /* ========== POSITION MANAGEMENT ========== */
 
     /**
@@ -1409,8 +1414,38 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
         );
 
         // Claim and automatically fulfill queue (consolidated in _tryClaimFirstPosition)
-        bool claimed = _tryClaimFirstPosition();
-        require(claimed, "Failed to claim position");
+        if (firstActivePositionId >= nextPositionId) {
+            revert("No active position");
+        }
+
+        Position storage position = positions[firstActivePositionId];
+
+        // Check if position is ready to claim
+        if (block.timestamp < position.startTime + COOLDOWN_PERIOD) {
+            revert("Position not ready to claim");
+        }
+
+        // Claim the position
+        _claimPosition(firstActivePositionId);
+
+        // Automatically fulfill pending withdrawal queue with ALL available USDe
+        // This ensures queued requests have priority (FIFO fairness)
+        uint256 totalAvailable = IERC20(asset()).balanceOf(address(this));
+        _fulfillPendingWithdrawals(totalAvailable);
+    }
+
+    /**
+     * @notice Process pending withdrawal queue without claiming a position
+     * @dev Keeper function to drain large queues that exceed batch limit.
+     *      Uses available idle USDe to fulfill pending requests in FIFO order.
+     *      Call repeatedly until queue is empty or liquidity is exhausted.
+     */
+    function processWithdrawalQueue() external onlyKeeper nonReentrant {
+        uint256 available = IERC20(asset()).balanceOf(address(this));
+        require(available > 0, "No liquidity available");
+        require(pendingWithdrawals.length > 0, "No pending withdrawals");
+
+        _fulfillPendingWithdrawals(available);
     }
 
     /**

@@ -1166,4 +1166,247 @@ describe("ArbitrageVault - Phase 6: Withdrawal Queue", function () {
       expect(aliceRequest.fulfilled).to.be.gt(0);
     });
   });
+
+  describe("Batch Processing - Queue Scalability", function () {
+    // These tests verify that the batch limit prevents gas exhaustion with large queues.
+    // With batch limit, each transaction processes at most maxWithdrawalsPerTx requests.
+
+    it("should respect batch limit and process only maxWithdrawalsPerTx requests", async function () {
+      // Test that batch limit is enforced
+      const QUEUE_SIZE = 30;
+      const BATCH_SIZE = 20; // Default maxWithdrawalsPerTx
+
+      const signers = await ethers.getSigners();
+
+      const MockERC20Factory = await ethers.getContractFactory("MockERC20");
+      const freshUsde = await MockERC20Factory.deploy("USDe", "USDe", 18);
+
+      const MockStakedUSDeFactory = await ethers.getContractFactory("MockStakedUSDe");
+      const freshSUsde = await MockStakedUSDeFactory.deploy(await freshUsde.getAddress(), COOLDOWN_PERIOD);
+
+      const VaultFactory = await ethers.getContractFactory("ArbitrageVault");
+      const freshVault = await VaultFactory.deploy(
+        await freshUsde.getAddress(),
+        await freshSUsde.getAddress(),
+        feeRecipient.address
+      );
+
+      const MockDEXFactory = await ethers.getContractFactory("MockDEX");
+      const freshDex = await MockDEXFactory.deploy(
+        await freshUsde.getAddress(),
+        await freshSUsde.getAddress(),
+        ethers.parseEther("1.05")
+      );
+
+      await freshVault.deployProxies(5);
+      await freshVault.addKeeper(keeper.address);
+
+      const depositAmount = ethers.parseEther("1000");
+      const withdrawShares = ethers.parseEther("50");
+
+      for (let i = 0; i < QUEUE_SIZE; i++) {
+        const user = signers[i % signers.length];
+        await freshUsde.mint(user.address, depositAmount);
+        await freshUsde.connect(user).approve(await freshVault.getAddress(), depositAmount);
+        await freshVault.connect(user).deposit(depositAmount, user.address);
+      }
+
+      const totalDeposited = depositAmount * BigInt(QUEUE_SIZE);
+      await freshSUsde.mint(await freshDex.getAddress(), totalDeposited * 2n);
+      await freshUsde.mint(await freshSUsde.getAddress(), totalDeposited * 2n);
+
+      const amountIn = totalDeposited - ethers.parseEther("100");
+      const swapCalldata = freshDex.interface.encodeFunctionData("swap", [amountIn, amountIn]);
+
+      await freshVault.connect(keeper).executeArbitrage(
+        await freshDex.getAddress(),
+        amountIn,
+        amountIn,
+        swapCalldata
+      );
+
+      // Create 30 withdrawal requests
+      for (let i = 0; i < QUEUE_SIZE; i++) {
+        const user = signers[i % signers.length];
+        await freshVault.connect(user).requestWithdrawal(withdrawShares, user.address, user.address);
+      }
+
+      const queueBefore = await freshVault.pendingWithdrawalCount();
+      console.log(`Queue before claimPosition: ${queueBefore}`);
+
+      await time.increase(COOLDOWN_PERIOD + 1);
+
+      // First claimPosition should process only BATCH_SIZE requests
+      await freshVault.connect(keeper).claimPosition();
+
+      const queueAfterFirst = await freshVault.pendingWithdrawalCount();
+      console.log(`Queue after first claimPosition: ${queueAfterFirst}`);
+
+      // Should have processed at most BATCH_SIZE
+      const processed = Number(queueBefore) - Number(queueAfterFirst);
+      console.log(`Processed: ${processed} (batch limit: ${BATCH_SIZE})`);
+
+      expect(processed).to.be.lte(BATCH_SIZE);
+      expect(queueAfterFirst).to.be.gt(0); // Some still pending
+
+      // Second call via processWithdrawalQueue should process the rest
+      await freshVault.connect(keeper).processWithdrawalQueue();
+
+      const queueAfterSecond = await freshVault.pendingWithdrawalCount();
+      console.log(`Queue after processWithdrawalQueue: ${queueAfterSecond}`);
+
+      expect(queueAfterSecond).to.equal(0);
+    });
+
+    it("should keep gas per transaction under 5M with batch limit", async function () {
+      // With batch limit = 20, gas should stay well under block limit
+      const MAX_GAS_PER_TX = 5_000_000n;
+
+      const signers = await ethers.getSigners();
+
+      const MockERC20Factory = await ethers.getContractFactory("MockERC20");
+      const freshUsde = await MockERC20Factory.deploy("USDe", "USDe", 18);
+
+      const MockStakedUSDeFactory = await ethers.getContractFactory("MockStakedUSDe");
+      const freshSUsde = await MockStakedUSDeFactory.deploy(await freshUsde.getAddress(), COOLDOWN_PERIOD);
+
+      const VaultFactory = await ethers.getContractFactory("ArbitrageVault");
+      const freshVault = await VaultFactory.deploy(
+        await freshUsde.getAddress(),
+        await freshSUsde.getAddress(),
+        feeRecipient.address
+      );
+
+      const MockDEXFactory = await ethers.getContractFactory("MockDEX");
+      const freshDex = await MockDEXFactory.deploy(
+        await freshUsde.getAddress(),
+        await freshSUsde.getAddress(),
+        ethers.parseEther("1.05")
+      );
+
+      await freshVault.deployProxies(5);
+      await freshVault.addKeeper(keeper.address);
+
+      // Create large queue (50 requests)
+      const QUEUE_SIZE = 50;
+      const depositAmount = ethers.parseEther("1000");
+      const withdrawShares = ethers.parseEther("50");
+
+      for (let i = 0; i < QUEUE_SIZE; i++) {
+        const user = signers[i % signers.length];
+        await freshUsde.mint(user.address, depositAmount);
+        await freshUsde.connect(user).approve(await freshVault.getAddress(), depositAmount);
+        await freshVault.connect(user).deposit(depositAmount, user.address);
+      }
+
+      const totalDeposited = depositAmount * BigInt(QUEUE_SIZE);
+      await freshSUsde.mint(await freshDex.getAddress(), totalDeposited * 2n);
+      await freshUsde.mint(await freshSUsde.getAddress(), totalDeposited * 2n);
+
+      const amountIn = totalDeposited - ethers.parseEther("100");
+      const swapCalldata = freshDex.interface.encodeFunctionData("swap", [amountIn, amountIn]);
+
+      await freshVault.connect(keeper).executeArbitrage(
+        await freshDex.getAddress(),
+        amountIn,
+        amountIn,
+        swapCalldata
+      );
+
+      for (let i = 0; i < QUEUE_SIZE; i++) {
+        const user = signers[i % signers.length];
+        await freshVault.connect(user).requestWithdrawal(withdrawShares, user.address, user.address);
+      }
+
+      await time.increase(COOLDOWN_PERIOD + 1);
+
+      // Measure gas for claimPosition (processes batch)
+      const tx = await freshVault.connect(keeper).claimPosition();
+      const receipt = await tx.wait();
+
+      console.log(`\n=== BATCH GAS TEST ===`);
+      console.log(`Queue size: ${QUEUE_SIZE}`);
+      console.log(`Gas used: ${receipt!.gasUsed}`);
+      console.log(`Max allowed: ${MAX_GAS_PER_TX}`);
+
+      expect(receipt!.gasUsed).to.be.lte(
+        MAX_GAS_PER_TX,
+        `Gas ${receipt!.gasUsed} exceeds ${MAX_GAS_PER_TX}. Batch limit not working!`
+      );
+    });
+
+    it("should allow owner to configure batch size", async function () {
+      // Test setMaxWithdrawalsPerTx
+
+      // Check initial value
+      expect(await vault.maxWithdrawalsPerTx()).to.equal(20);
+
+      // Update to new value
+      await vault.setMaxWithdrawalsPerTx(30);
+      expect(await vault.maxWithdrawalsPerTx()).to.equal(30);
+
+      // Test bounds
+      await expect(vault.setMaxWithdrawalsPerTx(5)).to.be.revertedWith("Batch too small");
+      await expect(vault.setMaxWithdrawalsPerTx(100)).to.be.revertedWith("Batch too large");
+
+      // Reset to default
+      await vault.setMaxWithdrawalsPerTx(20);
+    });
+
+    it("should allow processWithdrawalQueue to drain large queue", async function () {
+      // Create queue larger than batch limit, then drain it with multiple calls
+
+      // Use existing vault from beforeEach
+      const amountIn = ethers.parseEther("9000");
+      const minAmountOut = ethers.parseEther("9400");
+      const swapCalldata = dex.interface.encodeFunctionData("swap", [amountIn, minAmountOut]);
+
+      await vault.connect(keeper).executeArbitrage(
+        await dex.getAddress(),
+        amountIn,
+        minAmountOut,
+        swapCalldata
+      );
+
+      // Create 25 small withdrawal requests
+      const signers = await ethers.getSigners();
+      for (let i = 0; i < 25; i++) {
+        const user = signers[i % signers.length];
+        const shares = ethers.parseEther("10");
+
+        // Give user shares if needed
+        if (await vault.balanceOf(user.address) < shares) {
+          await usde.mint(user.address, ethers.parseEther("100"));
+          await usde.connect(user).approve(await vault.getAddress(), ethers.parseEther("100"));
+          await vault.connect(user).deposit(ethers.parseEther("100"), user.address);
+        }
+
+        await vault.connect(user).requestWithdrawal(shares, user.address, user.address);
+      }
+
+      const queueBefore = await vault.pendingWithdrawalCount();
+      console.log(`Queue before: ${queueBefore}`);
+
+      // Claim position to add liquidity
+      await time.increase(COOLDOWN_PERIOD + 1);
+      await vault.connect(keeper).claimPosition();
+
+      const queueAfterClaim = await vault.pendingWithdrawalCount();
+      console.log(`Queue after claimPosition: ${queueAfterClaim}`);
+
+      // Drain remaining with processWithdrawalQueue
+      let iterations = 0;
+      while ((await vault.pendingWithdrawalCount()) > 0 && iterations < 5) {
+        const available = await usde.balanceOf(await vault.getAddress());
+        if (available === 0n) break;
+
+        await vault.connect(keeper).processWithdrawalQueue();
+        iterations++;
+        console.log(`After processWithdrawalQueue #${iterations}: ${await vault.pendingWithdrawalCount()} pending`);
+      }
+
+      console.log(`Total iterations to drain queue: ${iterations + 1}`);
+      expect(await vault.pendingWithdrawalCount()).to.equal(0);
+    });
+  });
 });
