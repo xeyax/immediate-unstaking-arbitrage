@@ -128,18 +128,36 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
     /// @notice Mapping of request ID to withdrawal request
     mapping(uint256 => WithdrawalRequest) public withdrawalRequests;
 
-    /// @notice Array of pending withdrawal request IDs (FIFO queue)
-    uint256[] public pendingWithdrawals;
+    /// @notice Index of first active request in the withdrawal queue
+    /// @dev Queue uses head/tail pointers for O(1) operations instead of array shifting
+    /// @dev Starts at 1 (not 0) so queueIndex=0 means "not in queue" in requestToQueueIndex
+    uint256 public withdrawalQueueHead = 1;
 
-    /// @notice Mapping from request ID to its index in pendingWithdrawals array
-    /// @dev Used for O(1) removal. Value is index + 1 (0 means not in queue)
-    mapping(uint256 => uint256) private pendingWithdrawalIndex;
+    /// @notice Index for next new request in the withdrawal queue
+    uint256 public withdrawalQueueTail = 1;
+
+    /// @notice Mapping from queue index to withdrawal request ID
+    /// @dev Value of 0 means slot is empty (cancelled request)
+    mapping(uint256 => uint256) public withdrawalQueue;
+
+    /// @notice Mapping from request ID to its queue index
+    /// @dev Value of 0 means not in queue (since queue indices start at 1)
+    mapping(uint256 => uint256) private requestToQueueIndex;
 
     /// @notice Next withdrawal request ID to use
-    uint256 public nextWithdrawalRequestId;
+    /// @dev Starts at 1 (not 0) so that requestId=0 can be used as "empty slot" marker in queue
+    uint256 public nextWithdrawalRequestId = 1;
 
     /// @notice Mapping from user address to their withdrawal request IDs
     mapping(address => uint256[]) public userWithdrawalIds;
+
+    /// @notice Minimum withdrawal amount in assets (USDe) to prevent queue spam attacks
+    /// @dev Set to 1 USDe (~$1) - stable in USD terms regardless of share price
+    uint256 public constant MIN_WITHDRAWAL_ASSETS = 1e18;
+
+    /// @notice Minimum time before a withdrawal request can be cancelled
+    /// @dev Prevents spam attack: request() → cancel() loop to inflate queue with empty slots
+    uint256 public constant MIN_TIME_BEFORE_CANCEL = 5 minutes;
 
     /* ========== BATCH PROCESSING CONFIG ========== */
 
@@ -657,7 +675,25 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
      * @return Number of requests in the queue
      */
     function pendingWithdrawalCount() external view returns (uint256) {
-        return pendingWithdrawals.length;
+        return withdrawalQueueTail - withdrawalQueueHead;
+    }
+
+    /**
+     * @notice Returns exact count of active (non-cancelled, non-empty) pending withdrawals
+     * @return count Number of active requests in the queue
+     * @dev O(N) complexity - use sparingly, mainly for UI/dashboard.
+     *      pendingWithdrawalCount() is O(1) but may include empty slots from cancelled requests.
+     */
+    function getActivePendingCount() external view returns (uint256 count) {
+        for (uint256 i = withdrawalQueueHead; i < withdrawalQueueTail; i++) {
+            uint256 requestId = withdrawalQueue[i];
+            if (requestId != 0) { // 0 = empty slot (requestIds start at 1)
+                WithdrawalRequest storage request = withdrawalRequests[requestId];
+                if (!request.cancelled && request.fulfilled < request.shares) {
+                    count++;
+                }
+            }
+        }
     }
 
     /**
@@ -683,7 +719,7 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
         stats.sharePrice = supply > 0 ? (total * 1e18) / supply : 1e18; // Default 1:1 if no shares
         stats.idleAssets = IERC20(asset()).balanceOf(address(this));
         stats.activePositions = nextPositionId - firstActivePositionId;
-        stats.pendingWithdrawals = pendingWithdrawals.length;
+        stats.pendingWithdrawals = withdrawalQueueTail - withdrawalQueueHead;
         stats.totalFeesCollected = totalFeesCollected;
         stats.performanceFee = performanceFee;
         stats.minProfitThreshold = minProfitThreshold;
@@ -1184,6 +1220,10 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
         require(shares > 0, "Shares must be > 0");
         require(receiver != address(0), "Invalid receiver");
 
+        // Validate minimum withdrawal amount (in assets, stable in USD terms)
+        uint256 assetsValue = convertToAssets(shares);
+        require(assetsValue >= MIN_WITHDRAWAL_ASSETS, "Withdrawal below minimum (1 USDe)");
+
         // Handle allowance if caller is not owner
         if (msg.sender != owner) {
             _spendAllowance(owner, msg.sender, shares);
@@ -1204,16 +1244,17 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
             cancelled: false
         });
 
-        // Add to pending queue
-        pendingWithdrawals.push(requestId);
-        pendingWithdrawalIndex[requestId] = pendingWithdrawals.length; // index + 1
+        // Add to pending queue using O(1) head/tail pointers
+        // requestId starts at 1, so 0 in queue means empty slot
+        uint256 queueIndex = withdrawalQueueTail++;
+        withdrawalQueue[queueIndex] = requestId;
+        requestToQueueIndex[requestId] = queueIndex; // 0 means "not in queue" (indices start at 1)
 
         // Track user's withdrawal IDs
         userWithdrawalIds[owner].push(requestId);
 
         // Calculate assets for event (informational, actual amount determined at fulfillment)
-        uint256 estimatedAssets = convertToAssets(shares);
-        emit WithdrawalRequested(requestId, receiver, shares, estimatedAssets);
+        emit WithdrawalRequested(requestId, receiver, shares, assetsValue);
 
         // Try to fulfill immediately with idle liquidity (FIFO fairness)
         // Maintains invariant: idle_liquidity == 0 OR pending_queue.length == 0
@@ -1225,11 +1266,11 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
      * @notice Cancels a pending withdrawal request
      * @param requestId ID of the request to cancel
      * @dev Returns unfulfilled shares from escrow to the original owner.
-     *      FIFO-safe: Uses left-shift removal to preserve queue order.
-     *      O(N) complexity but acceptable since cancellations are rare.
+     *      O(1) operation - marks queue slot as empty.
      *
      *      Can only be called by the original share owner.
      *      Cannot cancel already fulfilled or cancelled requests.
+     *      Must wait MIN_TIME_BEFORE_CANCEL after request creation (prevents spam attack).
      */
     function cancelWithdrawal(uint256 requestId) external nonReentrant {
         WithdrawalRequest storage request = withdrawalRequests[requestId];
@@ -1238,15 +1279,21 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
         require(!request.cancelled, "Already cancelled");
         require(request.fulfilled < request.shares, "Already fully fulfilled");
 
+        // Prevent spam attack: request() → cancel() loop to inflate queue
+        require(
+            block.timestamp >= request.requestTime + MIN_TIME_BEFORE_CANCEL,
+            "Must wait 5 minutes before cancelling"
+        );
+
         // Calculate unfulfilled shares still in escrow
         uint256 sharesToReturn = request.shares - request.fulfilled;
 
         // Mark as cancelled
         request.cancelled = true;
 
-        // CRITICAL: Remove from queue (FIFO-safe left-shift)
+        // CRITICAL: Remove from queue (O(1) - marks slot as empty)
         // This prevents cancelled requests from blocking the vault
-        _removeFromQueuePreservingOrder(requestId);
+        _removeFromQueue(requestId);
 
         // Return shares from escrow to original owner
         _transfer(address(this), request.owner, sharesToReturn);
@@ -1255,70 +1302,39 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
     }
 
     /**
-     * @notice Internal helper to remove request from pending queue
-     * @param requestId ID of the request to remove
-     * @dev Uses swap-and-pop for O(1) removal
-     */
-    function _removeFromPendingQueue(uint256 requestId) internal {
-        uint256 indexPlusOne = pendingWithdrawalIndex[requestId];
-        if (indexPlusOne == 0) return; // Not in queue
-
-        uint256 index = indexPlusOne - 1;
-        uint256 lastIndex = pendingWithdrawals.length - 1;
-
-        if (index != lastIndex) {
-            uint256 lastRequestId = pendingWithdrawals[lastIndex];
-            pendingWithdrawals[index] = lastRequestId;
-            pendingWithdrawalIndex[lastRequestId] = indexPlusOne;
-        }
-
-        pendingWithdrawals.pop();
-        delete pendingWithdrawalIndex[requestId];
-    }
-
-    /**
-     * @notice Internal helper to remove first element from pending queue (FIFO-safe)
-     * @dev Uses left-shift instead of swap-and-pop to maintain FIFO order.
-     *      This is O(N) but necessary for FIFO guarantee. Used when fulfilling requests.
+     * @notice Internal helper to remove first element from pending queue
+     * @dev O(1) operation using head pointer. Simply increments head and clears mapping.
+     *      Empty slots (from cancelled requests) are skipped in _fulfillPendingWithdrawals().
      */
     function _removeFirstFromQueue() internal {
-        require(pendingWithdrawals.length > 0, "Queue is empty");
+        require(withdrawalQueueHead < withdrawalQueueTail, "Queue is empty");
 
-        uint256 firstRequestId = pendingWithdrawals[0];
-
-        // Shift all elements left by 1 position
-        for (uint256 i = 0; i < pendingWithdrawals.length - 1; i++) {
-            pendingWithdrawals[i] = pendingWithdrawals[i + 1];
-            // Update index mapping (stored as index+1)
-            pendingWithdrawalIndex[pendingWithdrawals[i]] = i + 1;
+        uint256 requestId = withdrawalQueue[withdrawalQueueHead];
+        if (requestId > 0) {
+            delete requestToQueueIndex[requestId];
         }
-
-        pendingWithdrawals.pop();
-        delete pendingWithdrawalIndex[firstRequestId];
+        delete withdrawalQueue[withdrawalQueueHead];
+        withdrawalQueueHead++;
     }
 
     /**
-     * @notice Internal helper to remove any element from pending queue (FIFO-safe)
+     * @notice Internal helper to remove any element from pending queue
      * @param requestId ID of the request to remove
-     * @dev Uses left-shift to preserve FIFO order for remaining elements.
-     *      This is O(N) but necessary to prevent queue reordering on cancellation.
-     *      Cancellations are rare, so O(N) is acceptable.
+     * @dev O(1) operation. Marks slot as empty (requestId = 0) without shifting.
+     *      Empty slots are skipped during fulfillment processing.
+     *      If removing the head element, advances head pointer for efficiency.
      */
-    function _removeFromQueuePreservingOrder(uint256 requestId) internal {
-        uint256 indexPlusOne = pendingWithdrawalIndex[requestId];
-        if (indexPlusOne == 0) return; // Not in queue
+    function _removeFromQueue(uint256 requestId) internal {
+        uint256 queueIndex = requestToQueueIndex[requestId];
+        if (queueIndex == 0) return; // Not in queue (indices start at 1)
 
-        uint256 index = indexPlusOne - 1;
+        delete withdrawalQueue[queueIndex]; // Mark slot as empty (0)
+        delete requestToQueueIndex[requestId];
 
-        // Shift all elements after index left by 1 position
-        for (uint256 i = index; i < pendingWithdrawals.length - 1; i++) {
-            pendingWithdrawals[i] = pendingWithdrawals[i + 1];
-            // Update index mapping (stored as index+1)
-            pendingWithdrawalIndex[pendingWithdrawals[i]] = i + 1;
+        // If we removed the head element, advance head pointer
+        if (queueIndex == withdrawalQueueHead) {
+            withdrawalQueueHead++;
         }
-
-        pendingWithdrawals.pop();
-        delete pendingWithdrawalIndex[requestId];
     }
 
     /**
@@ -1338,15 +1354,25 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
         uint256 remaining = availableAssets;
         uint256 processed = 0; // Batch limit counter
 
-        // FIFO: Always process head of queue (index 0)
+        // FIFO: Process queue from head to tail using O(1) pointer operations
         // Batch limit prevents gas exhaustion with large queues
-        while (pendingWithdrawals.length > 0 && remaining > 0 && processed < maxWithdrawalsPerTx) {
-            uint256 requestId = pendingWithdrawals[0]; // Always first element
+        // SECURITY: processed counts ALL iterations (including empty slots) to prevent
+        // DoS via cancelled request spam creating unbounded empty slot traversal
+        while (withdrawalQueueHead < withdrawalQueueTail && remaining > 0 && processed < maxWithdrawalsPerTx) {
+            uint256 requestId = withdrawalQueue[withdrawalQueueHead];
+            processed++; // Count ALL iterations to prevent DoS via empty slot spam
+
+            // Skip empty slots (from cancelled requests that were removed via _removeFromQueue)
+            // Empty slots have requestId == 0 (valid requestIds start at 1)
+            if (requestId == 0) {
+                withdrawalQueueHead++;
+                continue;
+            }
+
             WithdrawalRequest storage request = withdrawalRequests[requestId];
-            processed++; // Count toward batch limit to prevent gas exhaustion
 
             if (request.cancelled) {
-                // Remove cancelled request (FIFO-safe left-shift)
+                // Remove cancelled request (O(1) head pointer increment)
                 _removeFirstFromQueue();
                 continue;
             }
@@ -1363,7 +1389,7 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
                 usdeToken.safeTransfer(request.receiver, assetsForAllShares);
 
                 request.fulfilled = request.shares; // All shares burned
-                _removeFirstFromQueue(); // Request complete
+                _removeFirstFromQueue(); // Request complete (O(1))
 
                 emit WithdrawalFulfilled(requestId, request.receiver, assetsForAllShares, 0);
                 remaining -= assetsForAllShares;
@@ -1443,7 +1469,7 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
     function processWithdrawalQueue() external onlyKeeper nonReentrant {
         uint256 available = IERC20(asset()).balanceOf(address(this));
         require(available > 0, "No liquidity available");
-        require(pendingWithdrawals.length > 0, "No pending withdrawals");
+        require(withdrawalQueueHead < withdrawalQueueTail, "No pending withdrawals");
 
         _fulfillPendingWithdrawals(available);
     }

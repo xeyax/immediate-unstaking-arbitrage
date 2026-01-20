@@ -238,7 +238,8 @@ describe("ViewFunctions", function () {
       const requestId = await vault.nextWithdrawalRequestId();
       await vault.connect(user1).requestWithdrawal(withdrawShares, user1.address, user1.address);
 
-      // Cancel withdrawal
+      // Wait for cancel cooldown then cancel withdrawal
+      await time.increase(5 * 60 + 1);
       await vault.connect(user1).cancelWithdrawal(requestId);
 
       const info = await vault.getUserInfo(user1.address);
@@ -318,7 +319,8 @@ describe("ViewFunctions", function () {
       const requestId = await vault.nextWithdrawalRequestId();
       await vault.connect(user1).requestWithdrawal(ethers.parseEther("500"), user1.address, user1.address);
 
-      // Cancel withdrawal
+      // Wait for cancel cooldown then cancel withdrawal
+      await time.increase(5 * 60 + 1);
       await vault.connect(user1).cancelWithdrawal(requestId);
 
       const withdrawals = await vault.getUserWithdrawals(user1.address);

@@ -293,15 +293,17 @@ See contracts/ArbitrageVault.sol:566-589 for security implementation details.
 **Deliverables:**
 - Queue data structures ✓ (WithdrawalRequest struct with escrow mechanism)
 - `requestWithdrawal()` function ✓ (PRIMARY withdrawal method - escrow: transfers shares to contract)
-- `cancelWithdrawal()` function ✓ (FIFO-safe: left-shift removal preserves order)
+- `cancelWithdrawal()` function ✓ (FIFO-safe: O(1) removal marks slot empty)
 - **DISABLED** `redeem()` ✓ (always reverts - async-only model for max fairness)
 - **DISABLED** `withdraw()`, `mint()` ✓ (explicit reverts with helpful messages)
 - `deposit()` ✓ (standard deposit, NO auto-fulfill to prevent dilution)
 - Modified `claimPosition()` to permissionless ✓ (no onlyKeeper - anyone can trigger fulfillment)
 - `_fulfillPendingWithdrawals()` internal helper ✓ (dynamic NAV, called by claimPosition only)
 - `_tryClaimFirstPosition()` internal helper ✓ (claim + auto-fulfill consolidated)
-- `_removeFirstFromQueue()` helper ✓ (FIFO-safe left-shift for fulfillment)
-- `_removeFromQueuePreservingOrder()` helper ✓ (FIFO-safe left-shift for cancellation)
+- `_removeFirstFromQueue()` helper ✓ (O(1) head pointer increment)
+- `_removeFromQueue()` helper ✓ (O(1) - marks slot empty, advances head if first element)
+- Head/tail pointer queue for O(1) operations ✓ (DoS protection)
+- `maxWithdrawalsPerTx` batch limit ✓ (gas safety)
 - `maxRedeem()` override ✓ (always returns 0 - async-only model)
 - `maxWithdraw()` override ✓ (always returns 0 - async-only model)
 - **Permissionless claims** ✓ (claimPosition() has no onlyKeeper - anyone can call)
@@ -315,6 +317,7 @@ See contracts/ArbitrageVault.sol:566-589 for security implementation details.
 - Cancellations work ✓
 - Auto-claim firstActivePositionId on withdraw (FIFO-compatible) ✓
 - Auto-fulfill queue when keeper claims positions ✓
+- DoS protection: O(1) queue operations, MIN_WITHDRAWAL_ASSETS, MIN_TIME_BEFORE_CANCEL ✓
 
 **FIFO Adaptation:**
 - Auto-claim limited to `firstActivePositionId` only (respects FIFO from ADR-003)
@@ -469,11 +472,16 @@ All → Phase 8: Integration Testing
 - ✅ Security: allowance reset after each swap (prevents malicious keeper attack)
 - ✅ **Withdrawal queue system with explicit API** (Phase 6)
   - Escrow mechanism: shares held in contract, assets at current NAV (fairness)
-  - FIFO-safe cancellation: left-shift preserves order (_removeFromQueuePreservingOrder)
+  - FIFO-safe cancellation: O(1) removal via _removeFromQueue() (marks slot empty)
   - User-triggered claims: redeem() calls _tryClaimFirstPosition() if needed
   - Queue priority: redeem() blocked when queue not empty (prevents jumping)
   - Auto-fulfill on deposit: new liquidity goes to queue first
   - Consolidated claim+fulfill logic in _tryClaimFirstPosition()
+- ✅ **DoS protection implemented:**
+  - O(1) queue operations (head/tail pointers instead of array shifting)
+  - MIN_WITHDRAWAL_ASSETS = 1 USDe (spam protection)
+  - MIN_TIME_BEFORE_CANCEL = 5 minutes (request/cancel spam protection)
+  - maxWithdrawalsPerTx batch limit for gas safety
 - ✅ Test harness for unit tests (ArbitrageVaultHarness - testing only, NOT production)
 - ✅ Integration tests use production executeArbitrage() (ArbitrageExecution.test.ts)
 - ✅ **140 core tests passing, 16 pending** (async-only model - immediate withdrawal tests skipped)

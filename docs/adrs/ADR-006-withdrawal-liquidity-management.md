@@ -97,6 +97,35 @@ Only authorized keepers can finalize positions, no automatic finalization on wit
 - Off-chain: UIs can calculate ETA by checking `firstActivePositionId` and its maturation time
 - No on-chain ETA calculation needed - instant fulfillment in typical case makes it less relevant
 
+### DoS Protection Mechanisms (Added 2026-01-20)
+
+**Problem:** Unbounded withdrawal queue with O(N) left-shift removal could exceed block gas limit at ~2000 requests, causing DoS on `claimPosition()` and `cancelWithdrawal()`.
+
+**Solution:** Three-layer protection:
+
+1. **O(1) Queue Operations**
+   - Head/tail pointer queue instead of array shifting
+   - `withdrawalQueueHead` / `withdrawalQueueTail` track active range
+   - Cancelled requests mark slot as empty (skipped during fulfillment)
+   - Head advances when removing first element
+   - Fulfillment bounded by `maxWithdrawalsPerTx` (default 20)
+
+2. **Minimum Withdrawal Size**
+   - `MIN_WITHDRAWAL_ASSETS = 1e18` (1 USDe, ~$1)
+   - Increases economic cost of queue spam attacks
+   - Checked in assets (not shares) for stable USD-denominated minimum
+
+3. **Cancel Cooldown**
+   - `MIN_TIME_BEFORE_CANCEL = 5 minutes`
+   - Prevents request/cancel spam that fills queue with empty slots
+   - User must wait 5 minutes before cancelling their request
+
+**Queue Implementation Details:**
+- `pendingWithdrawalCount()` returns approximate count (tail - head, includes empty slots)
+- `getActivePendingCount()` returns exact count (iterates queue - O(N), use sparingly)
+- Request IDs start at 1 (not 0) so 0 means empty slot
+- Queue indices start at 1 so 0 means "not in queue"
+
 ### Dependencies
 
 - ADR-001 (Vault Token Standard): Withdrawal queue mechanism handles cases where finalization insufficient.

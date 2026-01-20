@@ -32,7 +32,7 @@ _Related:_ FR-01, FR-04
 
 ## FR-06 — Withdrawal Liquidity Management
 
-The vault must manage withdrawal requests when capital is deployed in unstaking positions. The vault must attempt to finalize matured positions to provide liquidity for withdrawals. Users must be informed of maximum withdrawal wait time (7 days corresponding to unstaking cooldown period).
+The vault must manage withdrawal requests when capital is deployed in unstaking positions. The vault must attempt to finalize matured positions to provide liquidity for withdrawals. Users must be informed of maximum withdrawal wait time (7 days corresponding to unstaking cooldown period). The vault must protect against denial-of-service attacks on the withdrawal queue through minimum withdrawal amounts, rate limiting of cancellations, and bounded gas consumption for queue operations.
 
 _Related:_ FR-01, FR-04
 

@@ -139,7 +139,7 @@ describe("ArbitrageVault - Phase 6: Withdrawal Queue", function () {
 
       if (queueCount > 0) {
         // Still queued (insufficient liquidity for full amount)
-        const request = await vault.getWithdrawalRequest(0);
+        const request = await vault.getWithdrawalRequest(1);
         expect(request.owner).to.equal(user1.address);
         expect(request.shares).to.be.gt(0);
         console.log("✅ Request queued (partial or no liquidity)");
@@ -169,6 +169,41 @@ describe("ArbitrageVault - Phase 6: Withdrawal Queue", function () {
     // Users must explicitly call requestWithdrawal() when liquidity insufficient
   });
 
+  describe("Minimum Withdrawal Size", function () {
+    it("should reject withdrawal below minimum (1 USDe)", async function () {
+      // Deposit small amount (0.5 USDe)
+      await usde.mint(user2.address, ethers.parseEther("0.5"));
+      await usde.connect(user2).approve(await vault.getAddress(), ethers.parseEther("0.5"));
+      await vault.connect(user2).deposit(ethers.parseEther("0.5"), user2.address);
+
+      const shares = await vault.balanceOf(user2.address);
+
+      // Try to withdraw - should fail because assets < 1 USDe
+      await expect(
+        vault.connect(user2).requestWithdrawal(shares, user2.address, user2.address)
+      ).to.be.revertedWith("Withdrawal below minimum (1 USDe)");
+    });
+
+    it("should accept withdrawal at minimum (1 USDe)", async function () {
+      // Deposit exactly 1 USDe
+      await usde.mint(user2.address, ethers.parseEther("1"));
+      await usde.connect(user2).approve(await vault.getAddress(), ethers.parseEther("1"));
+      await vault.connect(user2).deposit(ethers.parseEther("1"), user2.address);
+
+      const shares = await vault.balanceOf(user2.address);
+
+      // Should succeed and emit event (may be immediately fulfilled if liquidity available)
+      await expect(
+        vault.connect(user2).requestWithdrawal(shares, user2.address, user2.address)
+      ).to.emit(vault, "WithdrawalRequested");
+    });
+
+    it("should check MIN_WITHDRAWAL_ASSETS constant", async function () {
+      const minAssets = await vault.MIN_WITHDRAWAL_ASSETS();
+      expect(minAssets).to.equal(ethers.parseEther("1")); // 1 USDe
+    });
+  });
+
   describe("Withdrawal Request Cancellation", function () {
     let requestId: bigint;
 
@@ -194,8 +229,23 @@ describe("ArbitrageVault - Phase 6: Withdrawal Queue", function () {
       requestId = event?.args?.requestId;
     });
 
-    it("should allow user to cancel their withdrawal request", async function () {
+    it("should reject cancellation before cooldown period", async function () {
+      // Try to cancel immediately - should fail
+      await expect(
+        vault.connect(user1).cancelWithdrawal(requestId)
+      ).to.be.revertedWith("Must wait 5 minutes before cancelling");
+    });
+
+    it("should have correct MIN_TIME_BEFORE_CANCEL constant", async function () {
+      const minTime = await vault.MIN_TIME_BEFORE_CANCEL();
+      expect(minTime).to.equal(5 * 60); // 5 minutes in seconds
+    });
+
+    it("should allow user to cancel their withdrawal request after cooldown", async function () {
       const sharesBefore = await vault.balanceOf(user1.address);
+
+      // Wait for cooldown period
+      await time.increase(5 * 60 + 1); // 5 minutes + 1 second
 
       await expect(vault.connect(user1).cancelWithdrawal(requestId))
         .to.emit(vault, "WithdrawalCancelled");
@@ -204,8 +254,9 @@ describe("ArbitrageVault - Phase 6: Withdrawal Queue", function () {
       const sharesAfter = await vault.balanceOf(user1.address);
       expect(sharesAfter).to.be.gt(sharesBefore);
 
-      // Queue should be empty
-      expect(await vault.pendingWithdrawalCount()).to.equal(0);
+      // Queue should have no active requests (use getActivePendingCount for exact count)
+      // Note: pendingWithdrawalCount() returns tail - head which may include cancelled slots
+      expect(await vault.getActivePendingCount()).to.equal(0);
 
       // Request should be marked cancelled
       const request = await vault.getWithdrawalRequest(requestId);
@@ -213,12 +264,14 @@ describe("ArbitrageVault - Phase 6: Withdrawal Queue", function () {
     });
 
     it("should reject cancellation from non-owner", async function () {
+      await time.increase(5 * 60 + 1); // Wait for cooldown
       await expect(
         vault.connect(user2).cancelWithdrawal(requestId)
       ).to.be.revertedWith("Not request owner");
     });
 
     it("should reject cancelling already cancelled request", async function () {
+      await time.increase(5 * 60 + 1); // Wait for cooldown
       await vault.connect(user1).cancelWithdrawal(requestId);
 
       await expect(
@@ -264,7 +317,7 @@ describe("ArbitrageVault - Phase 6: Withdrawal Queue", function () {
       expect(received).to.be.lte(ethers.parseEther("5500")); // Upper bound (reasonable profit)
 
       // Request should be fully fulfilled (all shares burned)
-      const request = await vault.getWithdrawalRequest(0);
+      const request = await vault.getWithdrawalRequest(1);
       expect(request.fulfilled).to.equal(request.shares);
 
       // Queue should be empty
@@ -301,7 +354,7 @@ describe("ArbitrageVault - Phase 6: Withdrawal Queue", function () {
       expect(received).to.be.lt(ethers.parseEther("8000")); // Less than full request
 
       // Request should be partially fulfilled (some shares burned, some still in escrow)
-      const request = await vault.getWithdrawalRequest(0);
+      const request = await vault.getWithdrawalRequest(1);
       expect(request.fulfilled).to.be.gt(0);
       expect(request.fulfilled).to.be.lt(request.shares);
 
@@ -409,15 +462,15 @@ describe("ArbitrageVault - Phase 6: Withdrawal Queue", function () {
 
       // Verify request IDs are in order (if still queued)
       if (queueCountAfter3Requests >= 1) {
-        const req0 = await vault.getWithdrawalRequest(0);
+        const req0 = await vault.getWithdrawalRequest(1);
         expect(req0.owner).to.equal(user1.address);
       }
       if (queueCountAfter3Requests >= 2) {
-        const req1 = await vault.getWithdrawalRequest(1);
+        const req1 = await vault.getWithdrawalRequest(2);
         expect(req1.owner).to.equal(user2.address);
       }
       if (queueCountAfter3Requests >= 3) {
-        const req2 = await vault.getWithdrawalRequest(2);
+        const req2 = await vault.getWithdrawalRequest(3);
         expect(req2.owner).to.equal(user3.address);
       }
 
@@ -512,12 +565,15 @@ describe("ArbitrageVault - Phase 6: Withdrawal Queue", function () {
       const shares3 = await vault.balanceOf(user3.address);
       await vault.connect(user3).requestWithdrawal(shares3, user3.address, user3.address);
 
-      expect(await vault.pendingWithdrawalCount()).to.equal(3);
+      expect(await vault.getActivePendingCount()).to.equal(3);
 
-      // Cancel user2 (middle)
-      await vault.connect(user2).cancelWithdrawal(1);
+      // Wait for cancel cooldown then cancel user2 (middle)
+      // Request IDs: user1=1, user2=2, user3=3 (IDs start at 1)
+      await time.increase(5 * 60 + 1);
+      await vault.connect(user2).cancelWithdrawal(2);
 
-      expect(await vault.pendingWithdrawalCount()).to.equal(2);
+      // Use getActivePendingCount() for exact count (pendingWithdrawalCount includes empty slots)
+      expect(await vault.getActivePendingCount()).to.equal(2);
       console.log("✅ Cancelled middle request, queue: [user1, user3]");
 
       // Claim and verify FIFO
@@ -585,7 +641,7 @@ describe("ArbitrageVault - Phase 6: Withdrawal Queue", function () {
       const withdrawAmount = ethers.parseEther("5000");
       await withdrawAssets(vault, user1, withdrawAmount);
 
-      const request = await vault.getWithdrawalRequest(0);
+      const request = await vault.getWithdrawalRequest(1);
       expect(request.owner).to.equal(user1.address);
       expect(request.receiver).to.equal(user1.address);
       expect(request.shares).to.be.gt(0); // Shares held in escrow
@@ -624,7 +680,7 @@ describe("ArbitrageVault - Phase 6: Withdrawal Queue", function () {
       const received1 = balanceAfter1 - balanceBefore;
 
       // Check partial fulfillment
-      const request = await vault.getWithdrawalRequest(0);
+      const request = await vault.getWithdrawalRequest(1);
       expect(request.fulfilled).to.be.gt(0);
       expect(request.fulfilled).to.be.lt(request.shares);
       expect(received1).to.be.gt(0);
@@ -648,7 +704,7 @@ describe("ArbitrageVault - Phase 6: Withdrawal Queue", function () {
       const totalReceived = balanceAfter2 - balanceBefore;
 
       // Check complete fulfillment
-      const requestAfter = await vault.getWithdrawalRequest(0);
+      const requestAfter = await vault.getWithdrawalRequest(1);
       expect(requestAfter.fulfilled).to.equal(requestAfter.shares);
       expect(totalReceived).to.be.gte(withdrawAmount);
       expect(await vault.pendingWithdrawalCount()).to.equal(0);
@@ -696,8 +752,8 @@ describe("ArbitrageVault - Phase 6: Withdrawal Queue", function () {
       expect(user2Received).to.be.lt(ethers.parseEther("6000"));
 
       // Check request states
-      const req1 = await vault.getWithdrawalRequest(0);
-      const req2 = await vault.getWithdrawalRequest(1);
+      const req1 = await vault.getWithdrawalRequest(1);
+      const req2 = await vault.getWithdrawalRequest(2);
 
       expect(req1.fulfilled).to.equal(req1.shares); // Fully fulfilled
       expect(req2.fulfilled).to.be.gt(0); // Partially fulfilled
@@ -728,7 +784,7 @@ describe("ArbitrageVault - Phase 6: Withdrawal Queue", function () {
       await time.increase(COOLDOWN_PERIOD + 1);
       await vault.connect(keeper).claimPosition();
 
-      const request = await vault.getWithdrawalRequest(0);
+      const request = await vault.getWithdrawalRequest(1);
       expect(request.fulfilled).to.be.gt(0);
       expect(request.fulfilled).to.be.lt(request.shares);
 
@@ -793,7 +849,7 @@ describe("ArbitrageVault - Phase 6: Withdrawal Queue", function () {
       // by checking that convertToAssets returns less
 
       // For now, just verify that the mechanism works correctly
-      const request = await vault.getWithdrawalRequest(0);
+      const request = await vault.getWithdrawalRequest(1);
       expect(request.shares).to.be.gt(0);
 
       // Even with NAV decrease, user gets what their shares are worth
@@ -840,7 +896,7 @@ describe("ArbitrageVault - Phase 6: Withdrawal Queue", function () {
 
       // This should not revert due to rounding errors
       // In practice, we'd need a position to claim, but the logic should handle dust
-      const request = await vault.getWithdrawalRequest(0);
+      const request = await vault.getWithdrawalRequest(1);
       expect(request.shares).to.be.gt(0);
 
       // The mechanism should handle very small amounts without reverts
@@ -980,8 +1036,8 @@ describe("ArbitrageVault - Phase 6: Withdrawal Queue", function () {
       await vault.connect(keeper).claimPosition();
 
       // Get final request states
-      const aliceRequest = await vault.getWithdrawalRequest(0);
-      const bobRequest = await vault.getWithdrawalRequest(1);
+      const aliceRequest = await vault.getWithdrawalRequest(1);
+      const bobRequest = await vault.getWithdrawalRequest(2);
 
       console.log("\n=== AFTER Fulfillment ===");
       console.log("Alice requested:", ethers.formatEther(aliceShares), "shares");

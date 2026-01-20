@@ -249,7 +249,7 @@ describe("Integration Tests - Complex Scenarios", function () {
       // Provide TINY liquidity (100 wei)
       await usde.mint(await vault.getAddress(), BigInt(100));
 
-      const requestBefore = await vault.getWithdrawalRequest(0);
+      const requestBefore = await vault.getWithdrawalRequest(1);
 
       // Attempt to fulfill with dust amount
       // This should either:
@@ -290,7 +290,7 @@ describe("Integration Tests - Complex Scenarios", function () {
 
       // Main check: no division by zero or math errors
       // Request should still exist and be valid
-      const requestAfter = await vault.getWithdrawalRequest(0);
+      const requestAfter = await vault.getWithdrawalRequest(1);
       expect(requestAfter.shares).to.be.gt(0);
     });
 
