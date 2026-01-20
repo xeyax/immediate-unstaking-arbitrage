@@ -72,11 +72,15 @@ describe("ViewFunctions", function () {
       await usdeToken.connect(user1).approve(await vault.getAddress(), depositAmount);
       await vault.connect(user1).deposit(depositAmount, user1.address);
 
+      const actualShares = await vault.balanceOf(user1.address);
       const stats = await vault.getVaultStats();
 
       expect(stats.totalAssets).to.equal(depositAmount);
-      expect(stats.totalShares).to.equal(depositAmount);
-      expect(stats.sharePrice).to.equal(ethers.parseEther("1"));
+      expect(stats.totalShares).to.equal(actualShares);
+      // sharePrice = convertToAssets(1e18), which gives the value of 1e18 shares
+      // With _decimalsOffset, this differs from 1e18 but should be consistent with convertToAssets
+      const expectedSharePrice = await vault.convertToAssets(ethers.parseEther("1"));
+      expect(stats.sharePrice).to.equal(expectedSharePrice);
       expect(stats.idleAssets).to.equal(depositAmount);
       expect(stats.activePositions).to.equal(0);
       expect(stats.pendingWithdrawals).to.equal(0);
@@ -114,6 +118,8 @@ describe("ViewFunctions", function () {
       await usdeToken.connect(user1).approve(await vault.getAddress(), depositAmount);
       await vault.connect(user1).deposit(depositAmount, user1.address);
 
+      const actualShares = await vault.balanceOf(user1.address);
+
       // Lock all liquidity in a position to prevent instant fulfillment
       const sUsdeAmount = ethers.parseEther("100");
       const bookValue = depositAmount; // Use all idle liquidity
@@ -121,8 +127,8 @@ describe("ViewFunctions", function () {
       await stakedUsde.mint(await vault.getAddress(), sUsdeAmount);
       await vault.openPositionForTesting(sUsdeAmount, bookValue, expectedAssets);
 
-      // Now request withdrawal - should not be fulfilled immediately
-      const withdrawShares = ethers.parseEther("500");
+      // Now request withdrawal (50% of shares) - should not be fulfilled immediately
+      const withdrawShares = actualShares / 2n;
       await vault.connect(user1).requestWithdrawal(withdrawShares, user1.address, user1.address);
 
       const stats = await vault.getVaultStats();
@@ -151,10 +157,12 @@ describe("ViewFunctions", function () {
       await usdeToken.connect(user1).approve(await vault.getAddress(), depositAmount);
       await vault.connect(user1).deposit(depositAmount, user1.address);
 
+      const actualShares = await vault.balanceOf(user1.address);
       const info = await vault.getUserInfo(user1.address);
 
-      expect(info.shares).to.equal(depositAmount);
-      expect(info.assets).to.equal(depositAmount);
+      expect(info.shares).to.equal(actualShares);
+      // With _decimalsOffset, assets should still equal depositAmount (share value is maintained)
+      expect(info.assets).to.be.closeTo(depositAmount, ethers.parseEther("0.001"));
       expect(info.pendingWithdrawals).to.equal(0);
       expect(info.totalWithdrawalShares).to.equal(0);
       expect(info.totalWithdrawalAssets).to.equal(0);
@@ -168,6 +176,8 @@ describe("ViewFunctions", function () {
       await usdeToken.connect(user1).approve(await vault.getAddress(), depositAmount);
       await vault.connect(user1).deposit(depositAmount, user1.address);
 
+      const actualShares = await vault.balanceOf(user1.address);
+
       // Lock all liquidity
       const sUsdeAmount = ethers.parseEther("100");
       const bookValue = depositAmount;
@@ -175,13 +185,13 @@ describe("ViewFunctions", function () {
       await stakedUsde.mint(await vault.getAddress(), sUsdeAmount);
       await vault.openPositionForTesting(sUsdeAmount, bookValue, expectedAssets);
 
-      // Request withdrawal
-      const withdrawShares = ethers.parseEther("500");
+      // Request withdrawal (50% of shares)
+      const withdrawShares = actualShares / 2n;
       await vault.connect(user1).requestWithdrawal(withdrawShares, user1.address, user1.address);
 
       const info = await vault.getUserInfo(user1.address);
 
-      expect(info.shares).to.equal(depositAmount - withdrawShares); // Remaining shares
+      expect(info.shares).to.equal(actualShares - withdrawShares); // Remaining shares
       expect(info.pendingWithdrawals).to.equal(1);
       // Note: totalWithdrawalShares might be less than withdrawShares if partially fulfilled
       expect(info.totalWithdrawalShares).to.be.gt(0);
@@ -197,6 +207,8 @@ describe("ViewFunctions", function () {
       await usdeToken.connect(user1).approve(await vault.getAddress(), depositAmount);
       await vault.connect(user1).deposit(depositAmount, user1.address);
 
+      const actualShares = await vault.balanceOf(user1.address);
+
       // Lock all liquidity
       const sUsdeAmount = ethers.parseEther("100");
       const bookValue = depositAmount;
@@ -204,9 +216,9 @@ describe("ViewFunctions", function () {
       await stakedUsde.mint(await vault.getAddress(), sUsdeAmount);
       await vault.openPositionForTesting(sUsdeAmount, bookValue, expectedAssets);
 
-      // Request two withdrawals
-      const withdraw1 = ethers.parseEther("300");
-      const withdraw2 = ethers.parseEther("200");
+      // Request two withdrawals (30% and 20% of shares)
+      const withdraw1 = (actualShares * 30n) / 100n;
+      const withdraw2 = (actualShares * 20n) / 100n;
       await vault.connect(user1).requestWithdrawal(withdraw1, user1.address, user1.address);
       await vault.connect(user1).requestWithdrawal(withdraw2, user1.address, user1.address);
 
@@ -226,6 +238,8 @@ describe("ViewFunctions", function () {
       await usdeToken.connect(user1).approve(await vault.getAddress(), depositAmount);
       await vault.connect(user1).deposit(depositAmount, user1.address);
 
+      const actualShares = await vault.balanceOf(user1.address);
+
       // Lock all liquidity
       const sUsdeAmount = ethers.parseEther("100");
       const bookValue = depositAmount;
@@ -233,8 +247,8 @@ describe("ViewFunctions", function () {
       await stakedUsde.mint(await vault.getAddress(), sUsdeAmount);
       await vault.openPositionForTesting(sUsdeAmount, bookValue, expectedAssets);
 
-      // Request withdrawal
-      const withdrawShares = ethers.parseEther("500");
+      // Request withdrawal (50% of shares)
+      const withdrawShares = actualShares / 2n;
       const requestId = await vault.nextWithdrawalRequestId();
       await vault.connect(user1).requestWithdrawal(withdrawShares, user1.address, user1.address);
 
@@ -257,8 +271,10 @@ describe("ViewFunctions", function () {
       await usdeToken.connect(user1).approve(await vault.getAddress(), depositAmount);
       await vault.connect(user1).deposit(depositAmount, user1.address);
 
-      // Request withdrawal (should be fulfilled immediately)
-      const withdrawShares = ethers.parseEther("500");
+      const actualShares = await vault.balanceOf(user1.address);
+
+      // Request withdrawal (50% of shares, should be fulfilled immediately)
+      const withdrawShares = actualShares / 2n;
       await vault.connect(user1).requestWithdrawal(withdrawShares, user1.address, user1.address);
 
       const info = await vault.getUserInfo(user1.address);
@@ -286,12 +302,14 @@ describe("ViewFunctions", function () {
       await usdeToken.connect(user1).approve(await vault.getAddress(), depositAmount);
       await vault.connect(user1).deposit(depositAmount, user1.address);
 
-      // Request two withdrawals
+      const actualShares = await vault.balanceOf(user1.address);
+
+      // Request two withdrawals (30% and 20% of shares)
       const requestId1 = await vault.nextWithdrawalRequestId();
-      await vault.connect(user1).requestWithdrawal(ethers.parseEther("300"), user1.address, user1.address);
+      await vault.connect(user1).requestWithdrawal((actualShares * 30n) / 100n, user1.address, user1.address);
 
       const requestId2 = await vault.nextWithdrawalRequestId();
-      await vault.connect(user1).requestWithdrawal(ethers.parseEther("200"), user1.address, user1.address);
+      await vault.connect(user1).requestWithdrawal((actualShares * 20n) / 100n, user1.address, user1.address);
 
       const withdrawals = await vault.getUserWithdrawals(user1.address);
 
@@ -308,6 +326,8 @@ describe("ViewFunctions", function () {
       await usdeToken.connect(user1).approve(await vault.getAddress(), depositAmount);
       await vault.connect(user1).deposit(depositAmount, user1.address);
 
+      const actualShares = await vault.balanceOf(user1.address);
+
       // Lock all liquidity
       const sUsdeAmount = ethers.parseEther("100");
       const bookValue = depositAmount;
@@ -315,9 +335,9 @@ describe("ViewFunctions", function () {
       await stakedUsde.mint(await vault.getAddress(), sUsdeAmount);
       await vault.openPositionForTesting(sUsdeAmount, bookValue, expectedAssets);
 
-      // Request withdrawal
+      // Request withdrawal (50% of shares)
       const requestId = await vault.nextWithdrawalRequestId();
-      await vault.connect(user1).requestWithdrawal(ethers.parseEther("500"), user1.address, user1.address);
+      await vault.connect(user1).requestWithdrawal(actualShares / 2n, user1.address, user1.address);
 
       // Wait for cancel cooldown then cancel withdrawal
       await time.increase(5 * 60 + 1);
@@ -418,10 +438,15 @@ describe("ViewFunctions", function () {
       await usdeToken.connect(user1).approve(await vault.getAddress(), deposit1);
       await vault.connect(user1).deposit(deposit1, user1.address);
 
+      const user1Shares = await vault.balanceOf(user1.address);
+
       // User2 deposits
       const deposit2 = ethers.parseEther("2000");
       await usdeToken.connect(user2).approve(await vault.getAddress(), deposit2);
       await vault.connect(user2).deposit(deposit2, user2.address);
+
+      const user2Shares = await vault.balanceOf(user2.address);
+      const totalSharesBefore = await vault.totalSupply();
 
       // Open a position using ALL idle liquidity to prevent instant withdrawal fulfillment
       const sUsdeAmount = ethers.parseEther("100");
@@ -430,8 +455,8 @@ describe("ViewFunctions", function () {
       await stakedUsde.mint(await vault.getAddress(), sUsdeAmount);
       await vault.openPositionForTesting(sUsdeAmount, bookValue, expectedAssets);
 
-      // User1 requests withdrawal (won't be fulfilled due to no idle liquidity)
-      const withdrawShares = ethers.parseEther("500");
+      // User1 requests withdrawal (50% of their shares, won't be fulfilled due to no idle liquidity)
+      const withdrawShares = user1Shares / 2n;
       await vault.connect(user1).requestWithdrawal(withdrawShares, user1.address, user1.address);
 
       // Get all stats
@@ -446,17 +471,17 @@ describe("ViewFunctions", function () {
       // Note: Withdrawal might be partially fulfilled
       expect(vaultStats.pendingWithdrawals).to.be.gte(0);
       expect(vaultStats.pendingWithdrawals).to.be.lte(1);
-      // totalShares might be less than (deposit1 + deposit2) if withdrawal partially fulfilled
-      expect(vaultStats.totalShares).to.be.lte(deposit1 + deposit2);
-      expect(vaultStats.totalShares).to.be.gte(deposit1 + deposit2 - withdrawShares);
+      // totalShares might be less than before if withdrawal partially fulfilled
+      expect(vaultStats.totalShares).to.be.lte(totalSharesBefore);
+      expect(vaultStats.totalShares).to.be.gte(totalSharesBefore - withdrawShares);
 
       // Verify user1 info
-      expect(user1Info.shares).to.equal(deposit1 - withdrawShares);
+      expect(user1Info.shares).to.equal(user1Shares - withdrawShares);
       expect(user1Info.pendingWithdrawals).to.be.gte(0);
       expect(user1Info.pendingWithdrawals).to.be.lte(1);
 
       // Verify user2 info
-      expect(user2Info.shares).to.equal(deposit2);
+      expect(user2Info.shares).to.equal(user2Shares);
       expect(user2Info.pendingWithdrawals).to.equal(0);
 
       // Verify user1 withdrawals

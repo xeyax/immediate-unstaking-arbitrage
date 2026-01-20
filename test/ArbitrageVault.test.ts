@@ -102,9 +102,35 @@ describe("ArbitrageVault", function () {
       const tx = await vault.connect(user1).deposit(depositAmount, user1.address);
       await tx.wait();
 
-      // Check balances
-      expect(await vault.balanceOf(user1.address)).to.equal(depositAmount);
+      // Check balances - shares are received (value may differ due to _decimalsOffset)
+      const shares = await vault.balanceOf(user1.address);
+      expect(shares).to.be.gt(0);
       expect(await usdeToken.balanceOf(await vault.getAddress())).to.equal(depositAmount);
+      // Verify shares represent the same value
+      expect(await vault.convertToAssets(shares)).to.be.closeTo(depositAmount, ethers.parseEther("0.001"));
+    });
+
+    it("Should not allow donation-based inflation to zero shares", async function () {
+      const { vault, usdeToken, user1, user2 } = await loadFixture(deployVaultFixture);
+
+      const attackerDeposit = 1n; // 1 wei
+      const donation = ethers.parseEther("10000000"); // 10,000,000 USDe
+      const victimDeposit = ethers.parseEther("1"); // 1 USDe
+
+      await usdeToken.mint(user1.address, donation);
+
+      await usdeToken.connect(user1).approve(await vault.getAddress(), attackerDeposit);
+      await vault.connect(user1).deposit(attackerDeposit, user1.address);
+
+      await usdeToken.connect(user1).transfer(await vault.getAddress(), donation);
+
+      await usdeToken.connect(user2).approve(await vault.getAddress(), victimDeposit);
+      const sharesBefore = await vault.balanceOf(user2.address);
+      await vault.connect(user2).deposit(victimDeposit, user2.address);
+      const sharesAfter = await vault.balanceOf(user2.address);
+
+      const sharesMinted = sharesAfter - sharesBefore;
+      expect(sharesMinted).to.be.gt(0);
     });
 
     it("Should emit Deposited event on deposit", async function () {
@@ -113,14 +139,17 @@ describe("ArbitrageVault", function () {
       const depositAmount = ethers.parseEther("1000");
       await usdeToken.connect(user1).approve(await vault.getAddress(), depositAmount);
 
+      // Get expected shares before deposit
+      const expectedShares = await vault.previewDeposit(depositAmount);
+
       await expect(
         vault.connect(user1).deposit(depositAmount, user1.address)
       )
         .to.emit(vault, "Deposited")
-        .withArgs(user1.address, depositAmount, depositAmount);
+        .withArgs(user1.address, depositAmount, expectedShares);
     });
 
-    it("Should mint correct shares on first deposit (1:1 ratio)", async function () {
+    it("Should mint correct shares on first deposit (value preserved)", async function () {
       const { vault, usdeToken, user1 } = await loadFixture(deployVaultFixture);
 
       const depositAmount = ethers.parseEther("1000");
@@ -128,8 +157,9 @@ describe("ArbitrageVault", function () {
 
       await vault.connect(user1).deposit(depositAmount, user1.address);
 
-      // First deposit should have 1:1 ratio
-      expect(await vault.balanceOf(user1.address)).to.equal(depositAmount);
+      // Shares should represent the deposited value (accounting for _decimalsOffset)
+      const shares = await vault.balanceOf(user1.address);
+      expect(await vault.convertToAssets(shares)).to.be.closeTo(depositAmount, ethers.parseEther("0.001"));
     });
 
     it("Should handle multiple deposits correctly", async function () {
@@ -142,13 +172,17 @@ describe("ArbitrageVault", function () {
       await usdeToken.connect(user1).approve(await vault.getAddress(), depositAmount1);
       await vault.connect(user1).deposit(depositAmount1, user1.address);
 
+      const user1Shares = await vault.balanceOf(user1.address);
+
       // User2 deposits
       await usdeToken.connect(user2).approve(await vault.getAddress(), depositAmount2);
       await vault.connect(user2).deposit(depositAmount2, user2.address);
 
-      // Check balances
-      expect(await vault.balanceOf(user1.address)).to.equal(depositAmount1);
-      expect(await vault.balanceOf(user2.address)).to.equal(depositAmount2);
+      const user2Shares = await vault.balanceOf(user2.address);
+
+      // Check share values represent deposited amounts
+      expect(await vault.convertToAssets(user1Shares)).to.be.closeTo(depositAmount1, ethers.parseEther("0.001"));
+      expect(await vault.convertToAssets(user2Shares)).to.be.closeTo(depositAmount2, ethers.parseEther("0.001"));
       expect(await vault.totalAssets()).to.equal(depositAmount1 + depositAmount2);
     });
   });
@@ -281,7 +315,7 @@ describe("ArbitrageVault", function () {
   });
 
   describe("Share Pricing", function () {
-    it("Should maintain correct share price (1:1 for Phase 1)", async function () {
+    it("Should maintain correct share price (value preserved)", async function () {
       const { vault, usdeToken, user1 } = await loadFixture(deployVaultFixture);
 
       const depositAmount = ethers.parseEther("1000");
@@ -289,11 +323,12 @@ describe("ArbitrageVault", function () {
       await usdeToken.connect(user1).approve(await vault.getAddress(), depositAmount);
       await vault.connect(user1).deposit(depositAmount, user1.address);
 
-      // In Phase 1 with no profit, share price should be 1:1
+      // With _decimalsOffset, shares != assets but value should be preserved
       const shares = await vault.balanceOf(user1.address);
       const assets = await vault.convertToAssets(shares);
 
-      expect(assets).to.equal(depositAmount);
+      // Allow small tolerance for rounding
+      expect(assets).to.be.closeTo(depositAmount, ethers.parseEther("0.001"));
     });
   });
 });

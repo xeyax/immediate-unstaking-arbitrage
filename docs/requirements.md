@@ -26,7 +26,7 @@ _Related:_ FR-03, FR-05, FR-07
 
 ## FR-05 — Share Value Calculation
 
-The vault must calculate share value based on total vault assets including liquid USDe, deployed sUSDe positions, and pending unstaking positions. The calculation must ensure fair pricing for deposits and withdrawals that prevents existing shareholders from being diluted or exploited.
+The vault must calculate share value based on total vault assets including liquid USDe, deployed sUSDe positions, and pending unstaking positions. The calculation must ensure fair pricing for deposits and withdrawals that prevents existing shareholders from being diluted or exploited. The vault must implement protection against the ERC-4626 inflation/donation attack where an attacker manipulates share price through direct token transfers to steal deposits from subsequent users.
 
 _Related:_ FR-01, FR-04
 

@@ -482,9 +482,13 @@ All → Phase 8: Integration Testing
   - MIN_WITHDRAWAL_ASSETS = 1 USDe (spam protection)
   - MIN_TIME_BEFORE_CANCEL = 5 minutes (request/cancel spam protection)
   - maxWithdrawalsPerTx batch limit for gas safety
+- ✅ **ERC-4626 inflation attack protection:**
+  - `_decimalsOffset() = 8` adds 10^8 virtual shares/assets to conversion formulas
+  - Attacker needs ~$200M donation to steal $1 (economically infeasible)
+  - See ADR-001 for details
 - ✅ Test harness for unit tests (ArbitrageVaultHarness - testing only, NOT production)
 - ✅ Integration tests use production executeArbitrage() (ArbitrageExecution.test.ts)
-- ✅ **140 core tests passing, 16 pending** (async-only model - immediate withdrawal tests skipped)
+- ✅ **179 core tests passing, 17 pending** (async-only model - immediate withdrawal tests skipped)
   - Fully covers deposit, requestWithdrawal, queue fulfillment, FIFO, escrow, cancellation
 - ✅ Mock contracts with proper authorization (including MockDEX)
 - ✅ Minimal interfaces (unused code removed)

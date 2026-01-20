@@ -514,6 +514,23 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
     }
 
     /**
+     * @notice Returns decimal offset for virtual shares/assets (inflation attack protection)
+     * @return Offset of 6 decimals (10^6 virtual shares/assets)
+     * @dev Mitigates the classic ERC4626 inflation/donation attack by adding virtual
+     *      shares and assets. Without this, an attacker could:
+     *      1. Deposit 1 wei, get 1 share
+     *      2. Donate large amount directly to vault
+     *      3. Inflate share price so victim's deposit rounds to 0 shares
+     *      4. Withdraw and steal victim's deposit
+     *
+     *      With offset=8, attacker would need to donate ~$200M to steal $1,
+     *      making the attack economically infeasible.
+     */
+    function _decimalsOffset() internal view virtual override returns (uint8) {
+        return 8;
+    }
+
+    /**
      * @notice Returns maximum shares that can be immediately redeemed
      * @return Always returns 0 (async-only model, no immediate redemptions)
      * @dev Fully asynchronous withdrawal model: all withdrawals go through requestWithdrawal().
@@ -716,7 +733,8 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
 
         stats.totalAssets = total;
         stats.totalShares = supply;
-        stats.sharePrice = supply > 0 ? (total * 1e18) / supply : 1e18; // Default 1:1 if no shares
+        // Use convertToAssets for user-friendly share price (handles _decimalsOffset correctly)
+        stats.sharePrice = supply > 0 ? convertToAssets(1e18) : 1e18; // Value of 1e18 shares in assets
         stats.idleAssets = IERC20(asset()).balanceOf(address(this));
         stats.activePositions = nextPositionId - firstActivePositionId;
         stats.pendingWithdrawals = withdrawalQueueTail - withdrawalQueueHead;

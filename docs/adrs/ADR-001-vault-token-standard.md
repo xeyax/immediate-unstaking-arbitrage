@@ -56,6 +56,32 @@ Use internal `balanceOf` mapping with non-transferable shares. Trade-off: Simple
 - Override `totalAssets()` to reflect all vault assets (NAV calculation method defined in ADR-002).
 - Implement withdrawal queue for requests that exceed available liquidity.
 
+**Inflation Attack Protection:**
+
+Override `_decimalsOffset()` returning 8 to protect against the ERC-4626 inflation/donation attack:
+
+```solidity
+function _decimalsOffset() internal view virtual override returns (uint8) {
+    return 8;
+}
+```
+
+Without this protection, an attacker could:
+1. Deposit 1 wei to get 1 share (first depositor)
+2. Donate large amount directly to vault (e.g., 100 USDe)
+3. Victim deposits 50 USDe but receives 0 shares (integer division rounds down)
+4. Attacker withdraws their 1 share worth 150 USDe (stealing victim's deposit)
+
+With `_decimalsOffset() = 8`, OpenZeppelin adds 10^8 "virtual" shares and assets to the conversion formulas. This means an attacker would need to donate ~$200M to steal $1, making the attack economically infeasible.
+
+| Offset | Donation needed to steal $1 |
+|--------|----------------------------|
+| 6 | ~$2M |
+| 7 | ~$20M |
+| 8 | ~$200M |
+
+**Note:** This changes the shares:assets ratio. Depositing 1000 USDe yields ~1000×10^8 shares instead of 1000 shares. The value remains correct — `convertToAssets(shares)` always returns the proper USDe value.
+
 **User-facing function signatures (Async-Only Withdrawal Model):**
 - ✅ `deposit(assets, receiver)` → shares - **PRIMARY** deposit method (synchronous, immediate)
   - Auto-fulfills pending withdrawal queue with new liquidity

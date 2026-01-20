@@ -1258,7 +1258,6 @@ describe("ArbitrageVault - Phase 6: Withdrawal Queue", function () {
       await freshVault.addKeeper(keeper.address);
 
       const depositAmount = ethers.parseEther("1000");
-      const withdrawShares = ethers.parseEther("50");
 
       for (let i = 0; i < QUEUE_SIZE; i++) {
         const user = signers[i % signers.length];
@@ -1266,6 +1265,10 @@ describe("ArbitrageVault - Phase 6: Withdrawal Queue", function () {
         await freshUsde.connect(user).approve(await freshVault.getAddress(), depositAmount);
         await freshVault.connect(user).deposit(depositAmount, user.address);
       }
+
+      // Get actual share balance to calculate withdrawal amount (use 5% of one deposit's shares)
+      const sampleUserShares = await freshVault.balanceOf(signers[0].address);
+      const withdrawShares = sampleUserShares / 20n; // 5% of shares
 
       const totalDeposited = depositAmount * BigInt(QUEUE_SIZE);
       await freshSUsde.mint(await freshDex.getAddress(), totalDeposited * 2n);
@@ -1346,7 +1349,6 @@ describe("ArbitrageVault - Phase 6: Withdrawal Queue", function () {
       // Create large queue (50 requests)
       const QUEUE_SIZE = 50;
       const depositAmount = ethers.parseEther("1000");
-      const withdrawShares = ethers.parseEther("50");
 
       for (let i = 0; i < QUEUE_SIZE; i++) {
         const user = signers[i % signers.length];
@@ -1354,6 +1356,10 @@ describe("ArbitrageVault - Phase 6: Withdrawal Queue", function () {
         await freshUsde.connect(user).approve(await freshVault.getAddress(), depositAmount);
         await freshVault.connect(user).deposit(depositAmount, user.address);
       }
+
+      // Get actual share balance to calculate withdrawal amount (use 5% of one deposit's shares)
+      const sampleUserShares = await freshVault.balanceOf(signers[0].address);
+      const withdrawShares = sampleUserShares / 20n; // 5% of shares
 
       const totalDeposited = depositAmount * BigInt(QUEUE_SIZE);
       await freshSUsde.mint(await freshDex.getAddress(), totalDeposited * 2n);
@@ -1426,18 +1432,20 @@ describe("ArbitrageVault - Phase 6: Withdrawal Queue", function () {
 
       // Create 25 small withdrawal requests
       const signers = await ethers.getSigners();
+      const depositForShares = ethers.parseEther("100");
       for (let i = 0; i < 25; i++) {
         const user = signers[i % signers.length];
-        const shares = ethers.parseEther("10");
 
-        // Give user shares if needed
-        if (await vault.balanceOf(user.address) < shares) {
-          await usde.mint(user.address, ethers.parseEther("100"));
-          await usde.connect(user).approve(await vault.getAddress(), ethers.parseEther("100"));
-          await vault.connect(user).deposit(ethers.parseEther("100"), user.address);
-        }
+        // Give user shares if needed (deposit 100 USDe, then withdraw 10% of those shares)
+        await usde.mint(user.address, depositForShares);
+        await usde.connect(user).approve(await vault.getAddress(), depositForShares);
+        await vault.connect(user).deposit(depositForShares, user.address);
 
-        await vault.connect(user).requestWithdrawal(shares, user.address, user.address);
+        // Withdraw 10% of shares just deposited (worth ~10 USDe)
+        const userShares = await vault.balanceOf(user.address);
+        const withdrawAmount = userShares / 10n;
+
+        await vault.connect(user).requestWithdrawal(withdrawAmount, user.address, user.address);
       }
 
       const queueBefore = await vault.pendingWithdrawalCount();

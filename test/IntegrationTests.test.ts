@@ -89,7 +89,9 @@ describe("Integration Tests - Complex Scenarios", function () {
       console.log("✅ Arbitrage position created, liquidity locked");
 
       // 2. Alice creates withdrawal request (insufficient liquidity → queued)
-      const aliceShares = ethers.parseEther("5000");
+      // Use 50% of Alice's actual shares (not hardcoded value)
+      const aliceBalance = await vault.balanceOf(alice.address);
+      const aliceShares = aliceBalance / 2n;
       await vault.connect(alice).requestWithdrawal(aliceShares, alice.address, alice.address);
 
       expect(await vault.pendingWithdrawalCount()).to.equal(1);
@@ -164,9 +166,10 @@ describe("Integration Tests - Complex Scenarios", function () {
 
       console.log("✅ Liquidity locked in position");
 
-      // Record NAV before withdrawal request
-      const navBefore = (await vault.totalAssets() * BigInt(10000)) / await vault.totalSupply();
-      console.log("NAV before request:", Number(navBefore) / 10000);
+      // Record share price before withdrawal request (using convertToAssets for accuracy with _decimalsOffset)
+      const oneShare = ethers.parseEther("1");
+      const sharePriceBefore = await vault.convertToAssets(oneShare);
+      console.log("Share price before request:", ethers.formatEther(sharePriceBefore));
 
       // 2. Alice creates withdrawal request (insufficient liquidity → partially fulfilled + queued)
       const aliceShares = await vault.balanceOf(alice.address);
@@ -188,10 +191,10 @@ describe("Integration Tests - Complex Scenarios", function () {
       await time.increase(COOLDOWN_PERIOD / 2); // Halfway through
 
       if (await vault.totalSupply() > 0) {
-        const navMidway = (await vault.totalAssets() * BigInt(10000)) / await vault.totalSupply();
-        console.log("NAV midway (profit accruing):", Number(navMidway) / 10000);
-        expect(navMidway).to.be.gt(navBefore);
-        console.log("✅ NAV growing while Alice waits");
+        const sharePriceMidway = await vault.convertToAssets(oneShare);
+        console.log("Share price midway (profit accruing):", ethers.formatEther(sharePriceMidway));
+        expect(sharePriceMidway).to.be.gt(sharePriceBefore);
+        console.log("✅ Share price growing while Alice waits");
       }
 
       // 4. Claim position after cooldown
@@ -214,10 +217,10 @@ describe("Integration Tests - Complex Scenarios", function () {
 
       const totalSupplyFinal = await vault.totalSupply();
       if (totalSupplyFinal > 0) {
-        const navFinal = (await vault.totalAssets() * BigInt(10000)) / totalSupplyFinal;
-        console.log("NAV final:", Number(navFinal) / 10000);
+        const sharePriceFinal = await vault.convertToAssets(oneShare);
+        console.log("Share price final:", ethers.formatEther(sharePriceFinal));
       } else {
-        console.log("NAV final: N/A (all shares burned)");
+        console.log("Share price final: N/A (all shares burned)");
       }
 
       // CRITICAL: Alice should receive at least what she deposited + profit from position
@@ -241,8 +244,9 @@ describe("Integration Tests - Complex Scenarios", function () {
         calldata
       );
 
-      // Create withdrawal request (insufficient liquidity → queued)
-      await vault.connect(alice).requestWithdrawal(ethers.parseEther("5000"), alice.address, alice.address);
+      // Create withdrawal request (50% of shares, insufficient liquidity → queued)
+      const aliceShares = await vault.balanceOf(alice.address);
+      await vault.connect(alice).requestWithdrawal(aliceShares / 2n, alice.address, alice.address);
 
       expect(await vault.pendingWithdrawalCount()).to.equal(1);
 
@@ -309,8 +313,9 @@ describe("Integration Tests - Complex Scenarios", function () {
         calldata
       );
 
-      // Now create withdrawal request (0 liquidity → queued)
-      await vault.connect(alice).requestWithdrawal(ethers.parseEther("5000"), alice.address, alice.address);
+      // Now create withdrawal request (50% of shares, 0 liquidity → queued)
+      const aliceShares = await vault.balanceOf(alice.address);
+      await vault.connect(alice).requestWithdrawal(aliceShares / 2n, alice.address, alice.address);
 
       expect(await vault.pendingWithdrawalCount()).to.equal(1);
 
@@ -348,8 +353,9 @@ describe("Integration Tests - Complex Scenarios", function () {
         swapCalldata
       );
 
-      // Create withdrawal request
-      await vault.connect(alice).requestWithdrawal(ethers.parseEther("3000"), alice.address, alice.address);
+      // Create withdrawal request (30% of shares)
+      const aliceShares = await vault.balanceOf(alice.address);
+      await vault.connect(alice).requestWithdrawal((aliceShares * 30n) / 100n, alice.address, alice.address);
       expect(await vault.pendingWithdrawalCount()).to.equal(1);
 
       // Fast forward
