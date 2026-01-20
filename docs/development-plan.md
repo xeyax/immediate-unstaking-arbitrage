@@ -9,7 +9,7 @@ Development of ArbitrageVault.sol - a simplified ERC-4626 vault that performs au
 - `redeem(shares)`, `mint(shares)`, `withdraw(assets)` - **DISABLED** (always revert with helpful messages)
 - **All withdrawals are asynchronous** through the FIFO queue for maximum simplicity and fairness
 - **Instant fulfillment** when idle liquidity available - no waiting in typical case
-- **Fairness invariant maintained**: `idle_liquidity == 0 OR pending_queue.length == 0` (queue always has priority)
+- **Fairness invariant maintained**: `idle_liquidity == 0 OR pending_queue.length == 0` (queue always has priority, dust < 1 share worth acceptable)
 - **Permissionless claims** - anyone can call claimPosition() to fulfill queue (no keeper dependency)
 - Queue fulfilled when: idle liquidity available (instant), new deposits arrive (auto-fulfill), or anyone calls claimPosition() after cooldown
 
@@ -36,7 +36,7 @@ Development of ArbitrageVault.sol - a simplified ERC-4626 vault that performs au
 - `requestWithdrawal(shares)` - **ONLY** withdrawal method: async via FIFO queue, instant if idle liquidity
 - **DISABLED**: `redeem(shares)`, `mint(shares)`, `withdraw(assets)` (always revert)
 - Rationale: Perfect FIFO fairness, simpler code (-118 lines), no priority edge cases, instant withdrawals in typical case
-- Fairness invariant: `idle_liquidity == 0 OR pending_queue.length == 0` ensures queue always has priority
+- Fairness invariant: `idle_liquidity == 0 OR pending_queue.length == 0` ensures queue always has priority (dust < 1 share worth acceptable)
 
 ---
 

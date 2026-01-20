@@ -438,6 +438,7 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
 
         // Fulfill pending withdrawals with new liquidity (queue has priority - FIFO fairness)
         // Maintains invariant: idle_liquidity == 0 OR pending_queue.length == 0
+        // (dust < 1 share worth acceptable - used in next fulfillment cycle)
         uint256 idleBalance = IERC20(asset()).balanceOf(address(this));
         _fulfillPendingWithdrawals(idleBalance);
     }
@@ -1276,6 +1277,7 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
 
         // Try to fulfill immediately with idle liquidity (FIFO fairness)
         // Maintains invariant: idle_liquidity == 0 OR pending_queue.length == 0
+        // (dust < 1 share worth acceptable)
         uint256 idleBalance = IERC20(asset()).balanceOf(address(this));
         _fulfillPendingWithdrawals(idleBalance);
     }
@@ -1412,14 +1414,26 @@ contract ArbitrageVault is ERC4626, Ownable, ReentrancyGuard {
                 emit WithdrawalFulfilled(requestId, request.receiver, assetsForAllShares, 0);
                 remaining -= assetsForAllShares;
             } else {
-                // Partially fulfill: calculate how many shares we can afford at current NAV
-                uint256 sharesToBurn = previewWithdraw(remaining);
+                // Partial fulfillment: use floor-based shares calculation
+                // previewDeposit rounds DOWN (fewer shares), ensuring:
+                //   remaining >= convertToAssets(sharesToBurn)
+                // This prevents underpaying users and avoids transfer reverts
+                uint256 sharesToBurn = previewDeposit(remaining);
 
-                // Safety check: don't burn more than available in escrow
-                if (sharesToBurn > sharesRemaining) {
-                    sharesToBurn = sharesRemaining;
-                    remaining = convertToAssets(sharesToBurn);
+                // If available liquidity is too small to be worth any shares, stop processing.
+                // Note: This may leave dust in vault with non-empty queue, which is acceptable.
+                // The dust will be used in the next fulfillment cycle.
+                if (sharesToBurn == 0) {
+                    remaining = 0; // Clear remaining to maintain accounting
+                    break;
                 }
+
+                // Note: sharesToBurn > sharesRemaining is unreachable here because:
+                // - We're in else branch, so remaining < assetsForAllShares
+                // - previewDeposit uses floor rounding
+                // - Therefore sharesToBurn <= sharesRemaining always
+                // We use assert for defense-in-depth (should never trigger)
+                assert(sharesToBurn <= sharesRemaining);
 
                 // Burn partial shares and send corresponding assets
                 _burn(address(this), sharesToBurn);

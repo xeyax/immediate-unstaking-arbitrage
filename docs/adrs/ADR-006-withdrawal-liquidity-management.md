@@ -49,6 +49,7 @@ Only authorized keepers can finalize positions, no automatic finalization on wit
   - New deposits arrive (auto-fulfills queue with fresh liquidity)
 - **Fairness invariant:** `idle_liquidity == 0 OR pending_queue.length == 0` (never both > 0)
   - This ensures queued users always have priority over idle capital
+  - **Dust exception:** Tiny amounts (< 1 share worth, ~$0.00000001 with offset=8) may remain when queue is non-empty. This dust is used in the next fulfillment cycle.
   - Depositors receive shares at current NAV before their capital fulfills queue (no dilution)
 - **Guaranteed maximum wait time:** 7 days (one full cooldown period)
   - After 7 days, anyone (including queued user) can call `claimPosition()` to fulfill
@@ -69,7 +70,7 @@ Only authorized keepers can finalize positions, no automatic finalization on wit
 - `maxRedeem(user)` always returns 0 (no synchronous redeem(), must use requestWithdrawal())
 - `maxWithdraw(user)` always returns 0 (no synchronous withdraw(), must use requestWithdrawal())
 - **All withdrawals go through queue** - but instantly fulfilled in same transaction if idle liquidity available
-- **Fairness invariant**: `idle_liquidity == 0 OR pending_queue.length == 0` (queue has priority)
+- **Fairness invariant**: `idle_liquidity == 0 OR pending_queue.length == 0` (queue has priority, dust < 1 share worth acceptable)
 - **Permissionless fulfillment** - anyone can call claimPosition() to advance queue
 - Users in queue can trigger their own fulfillment (no keeper dependency)
 
