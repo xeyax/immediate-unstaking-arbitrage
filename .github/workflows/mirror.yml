@@ -21,7 +21,7 @@ jobs:
           git config user.name "Eugene"
           git config user.email "unstake@dome.net"
 
-          git remote add mirror https://x-access-token:${MIRROR_TOKEN}@github.com/unstakeyield/unstakeyield.git
+          git remote add mirror https://unstakeyield:${MIRROR_TOKEN}@github.com/unstakeyield/unstakeyield.git
 
           git filter-branch -f --env-filter '
             export GIT_AUTHOR_NAME="Eugene"
