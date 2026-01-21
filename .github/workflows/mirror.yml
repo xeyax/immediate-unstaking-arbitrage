@@ -1,0 +1,33 @@
+name: Mirror to public repo
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Rewrite author and push to mirror
+        env:
+          MIRROR_TOKEN: ${{ secrets.MIRROR_TOKEN }}
+        run: |
+          git config user.name "Eugene"
+          git config user.email "unstake@dome.net"
+
+          git remote add mirror https://x-access-token:${MIRROR_TOKEN}@github.com/unstakeyield/unstakeyield.git
+
+          git filter-branch -f --env-filter '
+            export GIT_AUTHOR_NAME="Eugene"
+            export GIT_AUTHOR_EMAIL="unstake@dome.net"
+            export GIT_COMMITTER_NAME="Eugene"
+            export GIT_COMMITTER_EMAIL="unstake@dome.net"
+          ' HEAD
+
+          git push mirror main --force
