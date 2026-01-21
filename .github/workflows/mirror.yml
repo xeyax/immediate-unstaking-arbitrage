@@ -29,6 +29,6 @@ jobs:
             export GIT_AUTHOR_EMAIL="unstake@dome.net"
             export GIT_COMMITTER_NAME="Eugene"
             export GIT_COMMITTER_EMAIL="unstake@dome.net"
-          ' HEAD
+          ' --tree-filter 'rm -rf .github' HEAD
 
           git push mirror main --force
