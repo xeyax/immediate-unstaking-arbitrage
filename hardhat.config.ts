@@ -21,10 +21,18 @@ const config: HardhatUserConfig = {
     hardhat: {
       chainId: 1337,
     },
+    mainnet: {
+      url: "http://localhost:4000/rpc/code-123",
+      chainId: 1,
+      timeout: 60000,
+    },
   },
   gasReporter: {
     enabled: process.env.REPORT_GAS !== undefined,
     currency: "USD",
+  },
+  etherscan: {
+    apiKey: process.env.ETHERSCAN_API_KEY,
   },
 };
 

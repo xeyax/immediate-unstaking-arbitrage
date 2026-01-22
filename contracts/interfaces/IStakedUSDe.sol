@@ -13,10 +13,9 @@ interface IStakedUSDe is IERC20 {
      * @notice Initiates cooldown period for unstaking shares
      * @dev After 7-day cooldown, can call unstake() to claim USDe
      * @param shares Amount of sUSDe shares to unstake
-     * @param owner Address initiating the cooldown
      * @return assets Expected amount of USDe that will be received after cooldown
      */
-    function cooldownShares(uint256 shares, address owner) external returns (uint256 assets);
+    function cooldownShares(uint256 shares) external returns (uint256 assets);
 
     /**
      * @notice Claims USDe after cooldown period completes

@@ -67,14 +67,14 @@ contract MockStakedUSDe is ERC20, IStakedUSDe {
     /**
      * @notice Initiates cooldown for unstaking shares
      * @param shares Amount of sUSDe shares to unstake
-     * @param owner Address initiating cooldown
      * @return assets Expected USDe amount after cooldown
      */
-    function cooldownShares(uint256 shares, address owner)
+    function cooldownShares(uint256 shares)
         external
         override
         returns (uint256 assets)
     {
+        address owner = msg.sender;
         require(shares > 0, "Shares must be > 0");
         require(balanceOf(owner) >= shares, "Insufficient balance");
 

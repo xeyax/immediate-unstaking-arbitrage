@@ -73,7 +73,7 @@ contract UnstakeProxy is Ownable {
 
         // Call Ethena to initiate cooldown
         // This burns sUSDe and locks USDe in silo for 7 days
-        expectedAssets = stakedUsde.cooldownShares(shares, address(this));
+        expectedAssets = stakedUsde.cooldownShares(shares);
 
         emit UnstakeInitiated(shares, expectedAssets);
     }

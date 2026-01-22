@@ -8,7 +8,10 @@
     "compile": "hardhat compile",
     "coverage": "hardhat coverage",
     "clean": "hardhat clean",
-    "typechain": "hardhat typechain"
+    "typechain": "hardhat typechain",
+    "deploy": "hardhat ignition deploy ignition/modules/ArbitrageVault.ts --network mainnet",
+    "deploy:status": "hardhat ignition status --network mainnet",
+    "verify": "hardhat ignition verify chain-1 --network mainnet"
   },
   "keywords": [
     "defi",
