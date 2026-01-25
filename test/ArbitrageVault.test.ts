@@ -185,48 +185,42 @@ describe("ArbitrageVault", function () {
       expect(await vault.convertToAssets(user2Shares)).to.be.closeTo(depositAmount2, ethers.parseEther("0.001"));
       expect(await vault.totalAssets()).to.equal(depositAmount1 + depositAmount2);
     });
+
+    it("Should revert on mint() calls (shares-based deposit disabled)", async function () {
+      const { vault, user1 } = await loadFixture(deployVaultFixture);
+      const shares = ethers.parseEther("1000");
+
+      await expect(
+        vault.connect(user1).mint(shares, user1.address)
+      ).to.be.revertedWith("ArbitrageVault: Use deposit(assets) instead of mint(shares)");
+    });
   });
 
   describe("Withdrawals", function () {
-    it.skip("Should allow users to withdraw USDe by burning shares", async function () {
+    it("Should revert on withdraw() calls (async-only model)", async function () {
       const { vault, usdeToken, user1 } = await loadFixture(deployVaultFixture);
 
       const depositAmount = ethers.parseEther("1000");
-      const withdrawAmount = ethers.parseEther("500");
-
-      // First deposit
       await usdeToken.connect(user1).approve(await vault.getAddress(), depositAmount);
       await vault.connect(user1).deposit(depositAmount, user1.address);
 
-      // Then withdraw (convert assets to shares for redeem)
-      const initialBalance = await usdeToken.balanceOf(user1.address);
-      const sharesToRedeem = await vault.previewWithdraw(withdrawAmount);
-      await vault.connect(user1).redeem(sharesToRedeem, user1.address, user1.address);
-
-      // Check balances
-      expect(await usdeToken.balanceOf(user1.address)).to.be.closeTo(
-        initialBalance + withdrawAmount,
-        ethers.parseEther("1")
-      );
-      const remainingShares = await vault.balanceOf(user1.address);
-      expect(remainingShares).to.be.closeTo(depositAmount - withdrawAmount, ethers.parseEther("1"));
+      // Try to withdraw - should revert
+      const withdrawAmount = ethers.parseEther("500");
+      await expect(
+        vault.connect(user1).withdraw(withdrawAmount, user1.address, user1.address)
+      ).to.be.revertedWith("ArbitrageVault: Use requestWithdrawal() for all withdrawals (async-only model)");
     });
 
-    it.skip("Should emit Withdrawn event on withdrawal", async function () {
+    it("Should return maxWithdraw = 0 (async-only model)", async function () {
       const { vault, usdeToken, user1 } = await loadFixture(deployVaultFixture);
 
       const depositAmount = ethers.parseEther("1000");
-      const withdrawAmount = ethers.parseEther("500");
-
       await usdeToken.connect(user1).approve(await vault.getAddress(), depositAmount);
       await vault.connect(user1).deposit(depositAmount, user1.address);
 
-      const sharesToRedeem = await vault.previewWithdraw(withdrawAmount);
-      await expect(
-        vault.connect(user1).redeem(sharesToRedeem, user1.address, user1.address)
-      )
-        .to.emit(vault, "Withdrawn")
-        .withArgs(user1.address, withdrawAmount, withdrawAmount);
+      // maxWithdraw should always be 0 (forces async withdrawal)
+      const maxWithdrawable = await vault.maxWithdraw(user1.address);
+      expect(maxWithdrawable).to.equal(0);
     });
 
     it("Should not allow withdrawal of more assets than deposited", async function () {
@@ -246,39 +240,30 @@ describe("ArbitrageVault", function () {
   });
 
   describe("Redeeming", function () {
-    it.skip("Should allow users to redeem shares for USDe", async function () {
+    it("Should revert on redeem() calls (async-only model)", async function () {
       const { vault, usdeToken, user1 } = await loadFixture(deployVaultFixture);
 
       const depositAmount = ethers.parseEther("1000");
-      const redeemShares = ethers.parseEther("500");
-
-      // First deposit
       await usdeToken.connect(user1).approve(await vault.getAddress(), depositAmount);
       await vault.connect(user1).deposit(depositAmount, user1.address);
 
-      // Then redeem
-      const initialBalance = await usdeToken.balanceOf(user1.address);
-      await vault.connect(user1).redeem(redeemShares, user1.address, user1.address);
-
-      // Check balances
-      expect(await usdeToken.balanceOf(user1.address)).to.equal(
-        initialBalance + redeemShares
-      );
-      expect(await vault.balanceOf(user1.address)).to.equal(depositAmount - redeemShares);
-    });
-
-    it.skip("Should emit Withdrawn event on redeem", async function () {
-      const { vault, usdeToken, user1 } = await loadFixture(deployVaultFixture);
-
-      const depositAmount = ethers.parseEther("1000");
+      // Try to redeem - should revert
       const redeemShares = ethers.parseEther("500");
-
-      await usdeToken.connect(user1).approve(await vault.getAddress(), depositAmount);
-      await vault.connect(user1).deposit(depositAmount, user1.address);
-
       await expect(
         vault.connect(user1).redeem(redeemShares, user1.address, user1.address)
-      ).to.emit(vault, "Withdrawn");
+      ).to.be.revertedWith("ArbitrageVault: Use requestWithdrawal() for all withdrawals (async-only model)");
+    });
+
+    it("Should return maxRedeem = 0 (async-only model)", async function () {
+      const { vault, usdeToken, user1 } = await loadFixture(deployVaultFixture);
+
+      const depositAmount = ethers.parseEther("1000");
+      await usdeToken.connect(user1).approve(await vault.getAddress(), depositAmount);
+      await vault.connect(user1).deposit(depositAmount, user1.address);
+
+      // maxRedeem should always be 0 (forces async withdrawal)
+      const maxRedeemable = await vault.maxRedeem(user1.address);
+      expect(maxRedeemable).to.equal(0);
     });
   });
 
@@ -298,19 +283,21 @@ describe("ArbitrageVault", function () {
       expect(await vault.totalAssets()).to.equal(deposit1 + deposit2);
     });
 
-    it.skip("Should update total assets after withdrawals", async function () {
-      const { vault, usdeToken, user1 } = await loadFixture(deployVaultFixture);
+    it("Should enforce maxWithdraw and maxRedeem = 0 for all users", async function () {
+      const { vault, usdeToken, user1, user2 } = await loadFixture(deployVaultFixture);
 
-      const depositAmount = ethers.parseEther("1000");
-      const withdrawAmount = ethers.parseEther("400");
+      // Multiple users deposit
+      await usdeToken.connect(user1).approve(await vault.getAddress(), ethers.parseEther("1000"));
+      await vault.connect(user1).deposit(ethers.parseEther("1000"), user1.address);
 
-      await usdeToken.connect(user1).approve(await vault.getAddress(), depositAmount);
-      await vault.connect(user1).deposit(depositAmount, user1.address);
+      await usdeToken.connect(user2).approve(await vault.getAddress(), ethers.parseEther("2000"));
+      await vault.connect(user2).deposit(ethers.parseEther("2000"), user2.address);
 
-      const sharesToRedeem = await vault.previewWithdraw(withdrawAmount);
-      await vault.connect(user1).redeem(sharesToRedeem, user1.address, user1.address);
-
-      expect(await vault.totalAssets()).to.be.closeTo(depositAmount - withdrawAmount, ethers.parseEther("1"));
+      // Both users should have 0 max withdraw/redeem
+      expect(await vault.maxWithdraw(user1.address)).to.equal(0);
+      expect(await vault.maxRedeem(user1.address)).to.equal(0);
+      expect(await vault.maxWithdraw(user2.address)).to.equal(0);
+      expect(await vault.maxRedeem(user2.address)).to.equal(0);
     });
   });
 

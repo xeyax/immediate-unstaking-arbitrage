@@ -303,10 +303,40 @@ describe("ArbitrageVault - Phase 5: Arbitrage Execution", function () {
         )
       ).to.be.revertedWith("No proxies available");
     });
+
+    it("should reject if no proxies deployed", async function () {
+      // Deploy fresh vault WITHOUT calling deployProxies()
+      const VaultFactory = await ethers.getContractFactory("ArbitrageVault");
+      const freshVault = await VaultFactory.deploy(
+        await usde.getAddress(),
+        await sUsde.getAddress(),
+        feeRecipient.address
+      );
+      await freshVault.waitForDeployment();
+
+      // Mint tokens and setup
+      await usde.mint(await freshVault.getAddress(), ethers.parseEther("10000"));
+      await freshVault.addKeeper(keeper.address);
+
+      const swapCalldata = dex.interface.encodeFunctionData("swap", [
+        ethers.parseEther("1000"),
+        ethers.parseEther("1050")
+      ]);
+
+      // Try to execute arbitrage
+      await expect(
+        freshVault.connect(keeper).executeArbitrage(
+          await dex.getAddress(),
+          ethers.parseEther("1000"),
+          ethers.parseEther("1050"),
+          swapCalldata
+        )
+      ).to.be.revertedWith("No proxies deployed");
+    });
   });
 
   describe("Slippage Protection", function () {
-    it("should reject if sUSDe received < minAmountOut", async function () {
+    it("should reject if sUSDe received < minAmountOut (DEX reverts)", async function () {
       const amountIn = ethers.parseEther("1000");
       const minAmountOut = ethers.parseEther("1100"); // Too high (expecting ~1050)
 
@@ -321,6 +351,37 @@ describe("ArbitrageVault - Phase 5: Arbitrage Execution", function () {
           swapCalldata
         )
       ).to.be.revertedWith("Swap failed");
+    });
+
+    it("should reject if sUSDe received < minAmountOut (vault guard)", async function () {
+      // Deploy DEX that doesn't check minAmountOut (to test vault's guard)
+      const MockDEXNoRevertFactory = await ethers.getContractFactory("MockDEXNoRevert");
+      const dexNoRevert = await MockDEXNoRevertFactory.deploy(
+        await usde.getAddress(),
+        await sUsde.getAddress(),
+        ethers.parseEther("1.04")  // 4% profit - low rate
+      );
+      await dexNoRevert.waitForDeployment();
+
+      // Mint sUSDe to DEX
+      await sUsde.mint(await dexNoRevert.getAddress(), ethers.parseEther("100000"));
+
+      const amountIn = ethers.parseEther("1000");
+      const minAmountOut = ethers.parseEther("1050"); // Expecting 5% profit
+
+      const swapCalldata = dexNoRevert.interface.encodeFunctionData("swap", [amountIn, minAmountOut]);
+
+      // DEX will return 1040 sUSDe (4% profit)
+      // But minAmountOut is 1050 sUSDe
+      // Vault's guard should catch this
+      await expect(
+        vault.connect(keeper).executeArbitrage(
+          await dexNoRevert.getAddress(),
+          amountIn,
+          minAmountOut,
+          swapCalldata
+        )
+      ).to.be.revertedWith("Insufficient sUSDe received (slippage)");
     });
 
     it("should succeed with reasonable minAmountOut", async function () {
@@ -606,21 +667,36 @@ describe("ArbitrageVault - Phase 5: Arbitrage Execution", function () {
   });
 
   describe("Edge Cases", function () {
-    it("should reject if USDe balance doesn't decrease after swap", async function () {
-      // This would indicate swap didn't actually execute or something is wrong
-      // In real DEX this shouldn't happen, but testing the guard
+    it("should reject if USDe balance doesn't decrease after swap (using MockMaliciousDEX)", async function () {
+      // Test the guard: balanceAfter >= balanceBefore (balance increased or stayed same)
+      // Uses MockMaliciousDEX in IncreaseBalance mode: returns USDe to caller
 
-      // Create malicious calldata that doesn't spend USDe
-      const maliciousCalldata = "0x12345678";
+      const MaliciousDEXFactory = await ethers.getContractFactory("MockMaliciousDEX");
+      const maliciousDex = await MaliciousDEXFactory.deploy(
+        await usde.getAddress(),
+        await sUsde.getAddress()
+      );
+      await maliciousDex.waitForDeployment();
+
+      // Set to IncreaseBalance mode: takes USDe but then returns MORE than amountIn
+      await maliciousDex.setAttackMode(1); // AttackMode.IncreaseBalance
+
+      // Fund malicious DEX with tokens
+      await usde.mint(await maliciousDex.getAddress(), ethers.parseEther("10000"));
+      await sUsde.mint(await maliciousDex.getAddress(), ethers.parseEther("10000"));
+
+      const amountIn = ethers.parseEther("1000");
+      const amountOut = ethers.parseEther("1050");
+      const swapCalldata = maliciousDex.interface.encodeFunctionData("swap", [amountIn, amountOut]);
 
       await expect(
         vault.connect(keeper).executeArbitrage(
-          await dex.getAddress(),
-          ethers.parseEther("1000"),
-          ethers.parseEther("1045"),
-          maliciousCalldata
+          await maliciousDex.getAddress(),
+          amountIn,
+          amountOut,
+          swapCalldata
         )
-      ).to.be.reverted; // Will revert because swap call fails
+      ).to.be.revertedWith("Balance increased after swap");
     });
 
     it("should reject if no sUSDe received", async function () {
@@ -641,6 +717,99 @@ describe("ArbitrageVault - Phase 5: Arbitrage Execution", function () {
         )
       ).to.be.revertedWith("Swap failed");
     });
+
+    it("should reject if no sUSDe received from swap (guard test)", async function () {
+      // Deploy malicious DEX that accepts USDe but gives 0 sUSDe
+      const MaliciousDEXFactory = await ethers.getContractFactory("MockDEX");
+      const maliciousDex = await MaliciousDEXFactory.deploy(
+        await usde.getAddress(),
+        await sUsde.getAddress(),
+        0  // exchangeRate = 0 (gives 0 sUSDe output)
+      );
+      await maliciousDex.waitForDeployment();
+
+      const amountIn = ethers.parseEther("1000");
+      const swapCalldata = maliciousDex.interface.encodeFunctionData("swap", [
+        amountIn,
+        0  // DEX expects minAmountOut in calldata
+      ]);
+
+      await expect(
+        vault.connect(keeper).executeArbitrage(
+          await maliciousDex.getAddress(),
+          amountIn,
+          1,  // minAmountOut = 1 wei (must be > 0 to pass input validation)
+          swapCalldata
+        )
+      ).to.be.revertedWith("No sUSDe received from swap");
+    });
+
+    it("should reject if USDe balance increases after swap (malicious DEX)", async function () {
+      // Deploy malicious DEX that returns USDe instead of taking it
+      const MaliciousDEXFactory = await ethers.getContractFactory("MockMaliciousDEX");
+      const maliciousDex = await MaliciousDEXFactory.deploy(
+        await usde.getAddress(),
+        await sUsde.getAddress()
+      );
+      await maliciousDex.waitForDeployment();
+
+      // Set attack mode to return USDe (increase balance)
+      await maliciousDex.setAttackMode(1); // IncreaseBalance
+
+      // Mint tokens to malicious DEX
+      await usde.mint(await maliciousDex.getAddress(), ethers.parseEther("10000"));
+      await sUsde.mint(await maliciousDex.getAddress(), ethers.parseEther("10000"));
+
+      const amountIn = ethers.parseEther("1000");
+      const amountOut = ethers.parseEther("1050");
+      const swapCalldata = maliciousDex.interface.encodeFunctionData("swap", [
+        amountIn,
+        amountOut
+      ]);
+
+      await expect(
+        vault.connect(keeper).executeArbitrage(
+          await maliciousDex.getAddress(),
+          amountIn,
+          amountOut,
+          swapCalldata
+        )
+      ).to.be.revertedWith("Balance increased after swap");
+    });
+
+    it("should reject if no USDe was spent (malicious DEX doesn't take payment)", async function () {
+      // Deploy malicious DEX that returns sUSDe but doesn't take USDe
+      const MaliciousDEXFactory = await ethers.getContractFactory("MockDEXNoSpend");
+      const maliciousDex = await MaliciousDEXFactory.deploy(
+        await usde.getAddress(),
+        await sUsde.getAddress()
+      );
+      await maliciousDex.waitForDeployment();
+
+      // Mint sUSDe to malicious DEX
+      await sUsde.mint(await maliciousDex.getAddress(), ethers.parseEther("10000"));
+
+      const amountIn = ethers.parseEther("1000");
+      const amountOut = ethers.parseEther("1050");
+      const swapCalldata = maliciousDex.interface.encodeFunctionData("swap", [
+        amountIn,
+        amountOut
+      ]);
+
+      await expect(
+        vault.connect(keeper).executeArbitrage(
+          await maliciousDex.getAddress(),
+          amountIn,
+          amountOut,
+          swapCalldata
+        )
+      ).to.be.revertedWith("No USDe was spent");
+    });
+
+    // NOTE: "Spent more than amountIn" guard is unreachable in current implementation
+    // because vault sets allowance = amountIn (line 962), so DEX cannot take more
+    // The guard exists as a safety check for future code changes
+    // If this becomes reachable, add test here
   });
 
   describe("Security: Donation Attack Prevention", function () {

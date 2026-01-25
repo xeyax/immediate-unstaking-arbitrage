@@ -69,7 +69,7 @@ describe("Integration Tests - Complex Scenarios", function () {
   });
 
   describe("Chain Reactions", function () {
-    it("redeem() triggers chain: claim → fulfill queue → create new request (CRITICAL)", async function () {
+    it("requestWithdrawal() triggers chain: claim → fulfill queue → create new request (CRITICAL)", async function () {
       // This tests the COMPLETE flow from one user action triggering multiple mechanisms
 
       // Setup: Lock liquidity first, then Alice requests withdrawal
