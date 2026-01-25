@@ -11,7 +11,8 @@
     "typechain": "hardhat typechain",
     "deploy": "hardhat ignition deploy ignition/modules/ArbitrageVault.ts --network mainnet",
     "deploy:status": "hardhat ignition status --network mainnet",
-    "verify": "hardhat ignition verify chain-1 --network mainnet"
+    "verify": "hardhat ignition verify chain-1 --network mainnet",
+    "test:fork": "FORK=true hardhat test test/MainnetFork.test.ts"
   },
   "keywords": [
     "defi",
